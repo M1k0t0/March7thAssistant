@@ -53,6 +53,7 @@ class CdpInput(InputBase):
             self.cloud_game.execute_cdp_cmd("Input.dispatchMouseEvent", {
                 "type": "mouseMoved",
                 "x": self.last_x, "y": self.last_y,
+                "buttons": 1,
                 "pointerType": "mouse"
             })
         except Exception as e:
@@ -61,16 +62,14 @@ class CdpInput(InputBase):
     # ---------------- Mouse ----------------
     def mouse_move(self, x, y):
         """
-        TODO 
-        由于 pointer lock 原因，mouse_move 无法实现视角旋转
-        这个问题可以之后通过注入脚本 + 发送伪造的移动数据来绕过
-        当前小助手暂时还没有需要视角旋转的功能
+        Moonlight Web Point and Drag 模式下，mouseMoved 需要带 buttons=1 才会被识别。
         """
         self.last_x, self.last_y = x, y
         try:
             self.cloud_game.execute_cdp_cmd("Input.dispatchMouseEvent", {
                 "type": "mouseMoved",
                 "x": x, "y": y,
+                "buttons": 1,
                 "pointerType": "mouse"
             })
             self.logger.debug(f"鼠标移动 ({x}, {y})")

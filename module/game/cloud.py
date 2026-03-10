@@ -5,9 +5,7 @@ import psutil
 import platform
 import sys
 import base64
-import requests
 import time
-import io
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, SessionNotCreatedException
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -26,14 +24,15 @@ from selenium.common.exceptions import WebDriverException
 from module.config import Config
 from module.game.base import GameControllerBase
 from module.logger import Logger
-# from utils.encryption import wdp_encrypt, wdp_decrypt
 
 from utils.console import is_docker_started
 
 
 class CloudGameController(GameControllerBase):
-    COOKIE_PATH = "settings/cookies.enc"          # Cookies 保存地址（仅用于调试）
-    GAME_URL = "https://sr.mihoyo.com/cloud"            # 游戏地址
+    MOONLIGHT_BASE_URL = "http://192.168.1.120:23456"   # Moonlight Web 基础地址
+    MOONLIGHT_HOST_ID = "3866122460"                     # Sunshine Host ID（可配置）
+    MOONLIGHT_APP_ID = "454747157"                       # Moonlight App ID
+    GAME_URL = f"{MOONLIGHT_BASE_URL}/stream.html?hostId={MOONLIGHT_HOST_ID}&appId={MOONLIGHT_APP_ID}"  # Moonlight Web 完整地址
     BROWSER_TAG = "--march-7th-assistant-sr-cloud-game"  # 自定义浏览器参数作为标识，用于识别哪些浏览器进程属于三月七小助手
     BROWSER_INSTALL_PATH = os.path.join(os.getcwd(), "3rdparty", "WebBrowser")  # 浏览器安装路径
     INTEGRATED_BROWSER_VERSION = "140.0.7339.207"      # 浏览器版本
@@ -97,10 +96,10 @@ class CloudGameController(GameControllerBase):
             "content_settings": {
                 "exceptions": {
                     "keyboard_lock": {  # 允许 keyboard_lock 权限
-                        "https://sr.mihoyo.com:443,*": {"setting": 1}
+                        "http://192.168.1.120:23456,*": {"setting": 1}
                     },
                     "clipboard": {   # 允许剪贴板读取权限
-                        "https://sr.mihoyo.com:443,*": {"setting": 1}
+                        "http://192.168.1.120:23456,*": {"setting": 1}
                     }
                 }
             }
@@ -113,17 +112,10 @@ class CloudGameController(GameControllerBase):
         self.cfg = cfg
         self.logger = logger
 
-        # 二维码登录通知限流（避免夜间定时任务反复刷屏）
-        self._qr_notify_sent_count = 0
-        self._qr_notify_max_count = 3
-        self._qr_notify_last_link = ""
-        self._qr_notify_last_sent_ts = 0.0
-        self._qr_notify_min_interval_sec = 60
-
         atexit.register(self._clean_at_exit)
 
-    def _wait_game_page_loaded(self, timeout=5) -> None:
-        """等待云崩铁网页加载出来，这里以背景图是否加载出来为准"""
+    def _wait_page_loaded(self, timeout=15) -> None:
+        """等待 Moonlight Web 页面加载完成"""
         if not self.driver:
             return
         for retry in range(self.MAX_RETRIES + 1):
@@ -132,13 +124,7 @@ class CloudGameController(GameControllerBase):
                 self.driver.refresh()
             try:
                 WebDriverWait(self.driver, timeout).until(
-                    lambda d: d.execute_script(
-                        """
-                        const img = document.querySelector('#app > div.home-wrapper > picture > img');
-                        if (!img) return false;
-                        return img && img.complete && img.naturalWidth > 0;
-                        """
-                    )
+                    lambda d: d.execute_script("return document.readyState") == "complete"
                 )
                 return
             except TimeoutException:
@@ -337,227 +323,11 @@ class CloudGameController(GameControllerBase):
 
         if not self.cfg.cloud_game_fullscreen_enable:
             self.driver.set_window_size(1920, 1120)
-        if first_run or not self.cfg.browser_persistent_enable:
-            self._load_initial_local_storage()
-        if self.cfg.auto_battle_detect_enable:
-            self.change_auto_battle(True)
-        if self.cfg.browser_dump_cookies_enable:
-            self._load_cookies()
-        self._refresh_page()
 
     def _restart_browser(self, headless=False) -> None:
         """重启浏览器"""
         self.stop_game()
         self._connect_or_create_browser(headless=headless)
-
-    def _load_initial_local_storage(self) -> bool:
-        """加载初始配置，去除初始引导，免责协议等弹窗"""
-
-        try:
-            with open("assets/config/initial_local_storage.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # settings = json.loads(data["clgm_web_app_settings_hkrpg_cn"])
-            # settings["videoMode"] = self.cfg.cloud_game_smooth_first_enable if 1 else 0
-            # data["clgm_web_app_settings_hkrpg_cn"] = json.dumps(settings)
-
-            # client_config = json.loads(data["clgm_web_app_client_store_config_hkrpg_cn"])
-            # client_config["speedLimitGearId"] = self.cfg.cloud_game_video_quality
-            # client_config["fabPosition"]["x"] = self.cfg.cloud_game_fab_pos_x
-            # client_config["fabPosition"]["y"] = self.cfg.cloud_game_fab_pos_y
-            # client_config["showGameStatBar"] = self.cfg.cloud_game_status_bar_enable
-            # client_config["gameStatBarType"] = self.cfg.cloud_game_status_bar_type
-            # client_config["volume"] = self.cfg.browser_headless_enable if 0 else 1
-            # data["clgm_web_app_client_store_config_hkrpg_cn"] = json.dumps(client_config)
-
-            # 注入浏览器
-            for key, value in data.items():
-                self.driver.execute_script(
-                    "window.localStorage.setItem(arguments[0], arguments[1]);",
-                    key,
-                    value,
-                )
-            self.log_info("加载初始配置成功")
-            return True
-        except Exception as e:
-            self.log_error(f"加载初始配置失败 {e}")
-            return False
-
-    def _save_cookies(self) -> bool:
-        """保存 Cookies （Debug only）"""
-        if not self.driver:
-            return
-        try:
-            cookies_json = json.dumps(self.driver.get_cookies(), ensure_ascii=False, indent=4)
-            with open(self.COOKIE_PATH, "wb") as f:
-                # f.write(wdp_encrypt(cookies_json.encode()))
-                f.write(cookies_json.encode())
-            self.log_info("登录信息保存成功。")
-        except Exception as e:
-            self.log_error(f"保存 cookies 失败: {e}")
-
-    def _load_cookies(self) -> bool:
-        """加载 Cookies （Debug only）"""
-        if not self.driver:
-            return False
-        try:
-            with open(self.COOKIE_PATH, "rb") as f:
-                # cookies = json.loads(wdp_decrypt(f.read()).decode())
-                cookies = json.loads(f.read().decode())
-
-            for cookie in cookies:
-                try:
-                    self.driver.add_cookie(cookie)
-                except Exception:
-                    pass  # 忽略无效 cookie
-
-            self.driver.refresh()
-            self.log_info("登录信息加载成功。")
-            return True
-        except FileNotFoundError:
-            self.log_info("cookies 文件不存在。")
-            return False
-        except Exception as e:
-            self.log_error(f"加载 cookies 失败: {e}")
-            return False
-
-    def _refresh_page(self) -> None:
-        if self.driver:
-            self.driver.refresh()
-            self._wait_game_page_loaded()
-
-    def _check_login(self, timeout=5) -> bool:
-        """检查是否已经登录"""
-        if not self.driver:
-            return None
-
-        logged_in_selector = "div.user-aid.wel-card__aid, .game-player, [class*='waiting-in-queue']"
-        not_logged_in_id = "mihoyo-login-platform-iframe"
-
-        try:
-            state = WebDriverWait(self.driver, timeout).until(
-                lambda d: (
-                    "logged_in"
-                    if d.find_elements(By.CSS_SELECTOR, logged_in_selector)
-                    else (
-                        "not_logged_in"
-                        if d.find_elements(By.ID, not_logged_in_id)
-                        else None
-                    )
-                )
-            )
-
-            return state == "logged_in"
-        except TimeoutException:
-            self.log_warning("检测登录状态超时：未出现登录或未登录标志元素")
-            return None
-
-    def _click_enter_game(self, timeout=5) -> None:
-        """
-        点击‘进入游戏’按钮。
-        """
-        if not self.driver:
-            return
-
-        game_selector = ".game-player"
-        guide_close_selector = "div.guide-close-btn__x"
-        enter_button_selector = "div.wel-card__content--start"
-        try:
-            if self.driver.find_elements(By.CSS_SELECTOR, game_selector):
-                self.log_info("已在游戏中")
-                return
-            guide_close_btn = self.driver.find_elements(By.CSS_SELECTOR, guide_close_selector)
-            if guide_close_btn:
-                # 先关闭 “保存网页地址，下次可一键游玩” 引导弹窗，避免遮挡后续游戏画面
-                self.driver.execute_script("arguments[0].click();", guide_close_btn[0])
-            enter_button = WebDriverWait(self.driver, timeout).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, enter_button_selector))
-            )
-            self.driver.execute_script("arguments[0].click();", enter_button)
-        except Exception as e:
-            self.log_error(f"点击进入游戏按钮游戏异常: {e}")
-            raise e
-
-    def _wait_in_queue(self, timeout=600) -> bool:
-        """排队等待进入"""
-        in_queue_selector = "[class*='waiting-in-queue']"
-        cloud_game_selector = ".game-player"
-        select_queue_selector = "[aria-labelledby*='请选择排队队列']"
-
-        try:
-            # 检查是否需要排队
-            status = WebDriverWait(self.driver, 10).until(
-                lambda d: d.execute_script("""
-                    if (document.querySelector(arguments[0])) return "game_running";
-                    else if (document.querySelector(arguments[1])) return "in_queue";
-                    else if (document.querySelector(arguments[2])) return "select_queue";
-                    else return null;
-                """, cloud_game_selector, in_queue_selector, select_queue_selector)
-            )
-
-            select_retries = 0
-            while status == "select_queue":
-                select_retries += 1
-                if select_retries >= 5:
-                    self.log_error("选择排队队列超时")
-                    return False
-                self.log_info("检测到选择排队队列界面，选择普通队列")
-                self.driver.execute_script("""
-                    try {
-                        document.getElementsByClassName("coin-prior-choose-item-include-info")[1].click();
-                    } catch(e) {}
-                """)
-                time.sleep(2)
-                status = WebDriverWait(self.driver, 10).until(
-                    lambda d: d.execute_script("""
-                        if (document.querySelector(arguments[0])) return "game_running";
-                        else if (document.querySelector(arguments[1])) return "in_queue";
-                        else if (document.querySelector(arguments[2])) return "select_queue";
-                        else return null;
-                    """, cloud_game_selector, in_queue_selector, select_queue_selector)
-                )
-
-            if status == "game_running":
-                self.log_info("游戏已启动，无需排队")
-                return True
-            elif status == "in_queue":
-                self.log_info("正在排队...")
-                last_wait_time = None
-                poll_interval = 5  # 每5秒检测一次
-                start_time = time.monotonic()
-                while time.monotonic() - start_time < timeout:
-                    # 检查是否已退出排队
-                    if not self.driver.find_elements(By.CSS_SELECTOR, in_queue_selector):
-                        self.log_info("排队成功，正在进入游戏")
-                        return True
-                    # 检测预计等待时间
-                    wait_time = self.driver.execute_script("""
-                        // 方式1: "预估排队时间30分钟以上，建议开拓者错峰进行游戏~"
-                        var timeHide = document.querySelector('.time-hide__text');
-                        if (timeHide && timeHide.textContent) {
-                            return timeHide.textContent.trim();
-                        }
-                        // 方式2: "预计等待时间 10~20 分钟"
-                        var singleRow = document.querySelector('.single-row');
-                        if (singleRow) {
-                            var valEl = singleRow.querySelector('.single-row__val');
-                            if (valEl && valEl.textContent) {
-                                return '预计等待时间: ' + valEl.textContent.replace(/\\s+/g, '').trim();
-                            }
-                        }
-                        return null;
-                    """)
-                    if wait_time and wait_time != last_wait_time:
-                        self.log_info(f"当前状态: {wait_time}")
-                        last_wait_time = wait_time
-                    time.sleep(poll_interval)
-                self.log_error("排队超时")
-                return False
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self.log_error(f"等待排队异常: {e}")
-            return False
 
     def _clean_at_exit(self) -> None:
         """当脚本退出时，关闭所有 headless 浏览器"""
@@ -693,254 +463,6 @@ class CloudGameController(GameControllerBase):
 
             self.log_error(f"相关页面和截图已经保存到：{dump_dir}")
 
-    def _switch_to_login_iframe(self) -> None:
-        iframe = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.ID, "mihoyo-login-platform-iframe"))
-        )
-        self.driver.switch_to.frame(iframe)
-
-    def _click_qr_login_button(self) -> None:
-        qr_login_button = WebDriverWait(self.driver, 5).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "div.qr-login-btn"))
-        )
-        try:
-            qr_login_button.click()
-            time.sleep(0.5)
-        except Exception as click_err:
-            self.log_warning(f"点击二维码登录按钮失败: {click_err}")
-
-    def _wait_and_get_qr_img(self):
-        self.log_debug("等待二维码加载...")
-        qr_img = WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "img.qr-loaded"))
-        )
-        self.log_debug("二维码已加载")
-        time.sleep(1)
-        return qr_img
-
-    def _save_qr_from_src(self, qr_img, qr_filename) -> None:
-        """从元素的 src 保存二维码图片（支持 data URI 与 HTTP URL）。"""
-        try:
-            qr_src = qr_img.get_attribute("src")
-            # data URI 形式
-            if qr_src and qr_src.startswith("data:image"):
-                b64_data = qr_src.split(",", 1)[1]
-                img_bytes = base64.b64decode(b64_data)
-                with open(qr_filename, "wb") as f:
-                    f.write(img_bytes)
-                return
-
-            # 网络图片，使用 requests 下载
-            if qr_src and qr_src.startswith("http"):
-                resp = requests.get(qr_src, timeout=10)
-                resp.raise_for_status()
-                with open(qr_filename, "wb") as f:
-                    f.write(resp.content)
-                return
-
-            # 其他情况回退为元素截图
-            qr_img.screenshot(qr_filename)
-        except Exception as e:
-            self.log_warning(f"保存二维码失败，尝试截图保存: {e}")
-            try:
-                qr_img.screenshot(qr_filename)
-            except Exception as err:
-                self.log_error(f"保存二维码失败: {err}")
-                raise
-
-    def _save_qr_img(self, qr_img) -> str:
-        import os
-        # 将二维码保存到 logs 目录，方便 Docker 挂载访问
-        logs_dir = "logs"
-        os.makedirs(logs_dir, exist_ok=True)
-        qr_filename = os.path.join(logs_dir, "qrcode_login.png")
-        self._save_qr_from_src(qr_img, qr_filename)
-        self.log_info("=" * 60)
-        self.log_info("请使用手机米游社 APP 扫描二维码登录")
-        self.log_info(f"二维码图片位置: {os.path.abspath(qr_filename)}")
-        return qr_filename
-
-    def _send_qr_notification(self, img_bytes: bytes, qr_link: str) -> bool:
-        """通过已配置的通知渠道发送二维码图片
-        
-        支持所有启用图片发送的通知渠道（飞书、Telegram、企业微信等）
-        并带有限流，避免二维码刷新时重复推送过多通知。
-        """
-        from module.notification import notif
-        from module.notification.notification import NotificationLevel
-
-        now_ts = time.time()
-
-        # 达到上限后不再推送（直到本轮登录结束）
-        if self._qr_notify_sent_count >= self._qr_notify_max_count:
-            self.log_info(f"二维码登录通知已达上限（{self._qr_notify_max_count}次），本轮不再推送")
-            return False
-
-        # 短时间内同链接重复刷新，跳过推送
-        if (
-            qr_link
-            and qr_link == self._qr_notify_last_link
-            and (now_ts - self._qr_notify_last_sent_ts) < self._qr_notify_min_interval_sec
-        ):
-            self.log_debug("二维码链接短时间内重复，跳过本次通知")
-            return False
-
-        # 将图片字节转换为 BytesIO
-        image_io = io.BytesIO(img_bytes)
-
-        # 发送通知到所有已配置的渠道
-        message = "请使用米游社APP扫描二维码登录\n\n链接：" + qr_link
-        notif.notify(content=message, image=image_io, level=NotificationLevel.ALL)
-
-        self._qr_notify_sent_count += 1
-        self._qr_notify_last_link = qr_link or ""
-        self._qr_notify_last_sent_ts = now_ts
-
-        self.log_info(f"二维码登录通知已发送（{self._qr_notify_sent_count}/{self._qr_notify_max_count}）")
-        return True
-
-
-    def _decode_qr_from_element(self, qr_img, qr_filename: str) -> None:
-        try:
-            import base64
-            import numpy as np
-            import cv2
-
-            qr_src = qr_img.get_attribute("src")
-            img_bytes = None
-            if qr_src and qr_src.startswith("data:image"):
-                b64_data = qr_src.split(",", 1)[1]
-                img_bytes = base64.b64decode(b64_data)
-            else:
-                with open(qr_filename, "rb") as f:
-                    img_bytes = f.read()
-
-            if not img_bytes:
-                self.log_debug("二维码图片为空")
-                return
-
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
-            if img is None:
-                self.log_debug("二维码图片解码失败")
-                return
-
-            # 手动补白边
-            h, w = img.shape[:2]
-            pad = max(10, min(h, w) // 10)  # 10% 尺寸，至少 10px
-
-            img = cv2.copyMakeBorder(
-                img,
-                pad, pad, pad, pad,
-                cv2.BORDER_CONSTANT,
-                value=255  # 白色静区
-            )
-
-            detector = cv2.QRCodeDetector()
-            data, points, _ = detector.detectAndDecode(img)
-
-            if data:
-                self.log_info("二维码内容：")
-                self.log_info(data)
-                self.log_info("提示：你也可以将该内容自行生成二维码后再扫码登录。")
-                
-                # 发送二维码登录通知
-                try:
-                    self._send_qr_notification(img_bytes, data)
-                except Exception as e:
-                    self.log_warning(f"发送二维码登录通知失败: {e}")
-            else:
-                self.log_debug("未能解析二维码内容。")
-
-        except Exception as e:
-            self.log_warning(f"解析二维码内容失败: {e}")
-
-    def _wait_scan_success_with_refresh(self, qr_filename: str) -> None:
-        import os
-        check_interval = 2
-        while True:
-            # 成功
-            if self.driver.find_elements(By.XPATH, "//*[contains(text(), '扫码成功')]"):
-                try:
-                    if os.path.exists(qr_filename):
-                        os.remove(qr_filename)
-                        self.log_debug(f"已删除二维码图片: {os.path.abspath(qr_filename)}")
-                except Exception as del_err:
-                    self.log_warning(f"删除二维码图片失败: {del_err}")
-                self.log_info("扫码成功！请在手机上点击【确认登录】")
-                break
-
-            # 过期刷新
-            expired_elements = self.driver.find_elements(By.CSS_SELECTOR, "div.qr-expired")
-            if expired_elements and expired_elements[0].is_displayed():
-                self.log_warning("二维码已过期，正在刷新...")
-                try:
-                    qr_wrap = self.driver.find_element(By.CSS_SELECTOR, "div.qr-wrap")
-                    qr_wrap.click()
-                    time.sleep(1)
-
-                    WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "img.qr-loaded"))
-                    )
-                    self.log_info("二维码已刷新，请重新扫描")
-
-                    try:
-                        qr_img = self.driver.find_element(By.CSS_SELECTOR, "img.qr-loaded")
-                        self._save_qr_from_src(qr_img, qr_filename)
-                        self.log_info("=" * 60)
-                        self.log_info("请使用手机米游社 APP 扫描二维码登录")
-                        self.log_info(f"二维码图片位置: {os.path.abspath(qr_filename)}")
-                        self._decode_qr_from_element(qr_img, qr_filename)
-                        self.log_info("=" * 60)
-                        self.log_info("等待扫码（二维码过期将自动刷新）...")
-                    except Exception as refresh_err:
-                        self.log_warning(f"保存刷新后的二维码失败: {refresh_err}")
-                except Exception as refresh_err:
-                    self.log_error(f"刷新二维码失败: {refresh_err}")
-                    break
-
-            time.sleep(check_interval)
-
-    def _run_qr_login_flow(self) -> None:
-        self.log_info("正在切换到二维码登录...")
-
-        # 每次进入二维码登录流程时重置通知限流状态
-        self._qr_notify_sent_count = 0
-        self._qr_notify_last_link = ""
-        self._qr_notify_last_sent_ts = 0.0
-
-        try:
-            self._switch_to_login_iframe()
-            self._click_qr_login_button()
-            qr_img = self._wait_and_get_qr_img()
-            try:
-                qr_filename = self._save_qr_img(qr_img)
-            except Exception as save_err:
-                self.log_warning(f"保存二维码截图失败: {save_err}")
-                qr_filename = os.path.join("logs", "qrcode_login.png")
-
-            # 初次解码
-            self._decode_qr_from_element(qr_img, qr_filename)
-            self.log_info("=" * 60)
-            self.log_info("等待扫码（二维码过期将自动刷新）...")
-            self._wait_scan_success_with_refresh(qr_filename)
-        except TimeoutException:
-            self.log_warning("等待二维码加载超时")
-        except Exception as e:
-            import traceback
-            self.log_error(f"切换二维码登录失败: {e}")
-            self.log_error(f"详细错误:\n{traceback.format_exc()}")
-            try:
-                self.try_dump_page()
-            except Exception as dump_err:
-                self.log_warning(f"尝试导出页面失败: {dump_err}")
-        finally:
-            try:
-                self.driver.switch_to.default_content()
-                self.log_info("已切换回主文档")
-            except Exception as switch_err:
-                self.log_warning(f"切回主文档失败: {switch_err}")
-
     def start_game_process(self, headless=None) -> bool:
         """启动浏览器进程"""
         try:
@@ -954,53 +476,119 @@ class CloudGameController(GameControllerBase):
             return False
 
     def is_in_game(self) -> bool:
-        if self.driver:
-            return True if self.driver.find_elements(By.CSS_SELECTOR, ".game-player") else False
-
-    def enter_cloud_game(self) -> bool:
-        """进入云游戏"""
+        """这里无法判断是否在云游戏内，如果返回 False 会导致小助手开始检查云游戏语言设置，而这个功能在 Moonlight Web 场景下不存在，导致卡死"""
         try:
-            # 检测登录状态
-            while not self._check_login():
-                self.log_info("未登录")
-
-                # 如果是 headless 且配置了自动重启，则以非 headless 模式重启启动让用户登录
-                if self.cfg.browser_headless_enable and self.cfg.browser_headless_restart_on_not_logged_in:
-                    self.log_info("无窗口模式下检测到未登录，将以有窗口模式重启浏览器")
-                    self._restart_browser(headless=False)
-
-                # 如果是 headless 且配置了不重启，则尝试二维码登录
-                if self.cfg.browser_headless_enable and (not self.cfg.browser_headless_restart_on_not_logged_in):
-                    self._run_qr_login_flow()
-
-                self.log_info("请在浏览器中完成登录操作")
-
-                # 循环检测用户是否登录
-                while not self._check_login():
-                    time.sleep(2)
-
-                self.log_info("检测到登录成功")
-
-                # 如果为 headless 模式，则重启浏览器回到 headless 模式
-                if self.cfg.browser_headless_enable and self.cfg.browser_headless_restart_on_not_logged_in:
-                    if self.cfg.browser_dump_cookies_enable:
-                        self._save_cookies()
-                    self.log_info("登录完成，将重启为无窗口模式")
-                    self._restart_browser(headless=True)
-
-            if self.cfg.browser_dump_cookies_enable:
-                self._save_cookies()
-            self._click_enter_game()
-            if not self._wait_in_queue(int(self.cfg.cloud_game_max_queue_time) * 60):
-                return False
-            self._confirm_viewport_resolution()  # 将浏览器内部分辨率设置为 1920x1080
-
-            self.log_info("进入云游戏成功")
+            self._wait_page_loaded()
+            self._wait_page_ready()
+            self._click_lock_mouse_button()
+            self._confirm_viewport_resolution()
+            self.log_info("进入云游戏成功（Moonlight Web）")
             return True
         except Exception as e:
             self.try_dump_page()
             self.log_error(f"进入云游戏失败: {e}")
             return False
+
+    def _wait_page_ready(self, timeout=30) -> None:
+        """等待 Moonlight Web 串流界面就绪（以 sidebar-button 出现为标志）"""
+        if not self.driver:
+            return
+        self.log_info("等待串流界面就绪...")
+        try:
+            WebDriverWait(self.driver, timeout).until(
+                lambda d: d.execute_script(
+                    "return document.getElementById('sidebar-button') !== null"
+                )
+            )
+            self.log_info("串流界面已就绪（sidebar-button 已出现）")
+        except TimeoutException:
+            raise Exception(f"串流界面在 {timeout}s 内未就绪（sidebar-button 未出现）")
+
+    def enter_cloud_game(self) -> bool:
+        """进入云游戏（Moonlight Web 直连，无需登录/排队）"""
+        return True
+
+    def _click_lock_mouse_button(self, timeout=10) -> None:
+        """先打开侧边菜单，再通过 CDP 模拟真实鼠标点击 Lock Mouse 按钮以激活 pointer lock"""
+        if not self.driver:
+            return
+        try:
+            import time
+            from selenium.webdriver.support.ui import WebDriverWait
+
+            time.sleep(2)  # 等待页面稳定，避免元素尚未渲染导致的点击失败
+
+            # 1. 点击侧边栏按钮打开菜单
+            sidebar_rect = WebDriverWait(self.driver, timeout).until(
+                lambda d: d.execute_script("""
+                    var btn = document.getElementById('sidebar-button');
+                    if (!btn) return null;
+                    var r = btn.getBoundingClientRect();
+                    return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+                """)
+            )
+            sx, sy = sidebar_rect["x"], sidebar_rect["y"]
+            self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                "type": "mousePressed", "x": sx, "y": sy,
+                "button": "left", "buttons": 1, "clickCount": 1, "pointerType": "mouse"
+            })
+            self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                "type": "mouseReleased", "x": sx, "y": sy,
+                "button": "left", "buttons": 0, "clickCount": 1, "pointerType": "mouse"
+            })
+            time.sleep(0.5)
+
+            # 2. 将 Mouse Mode 切换为 Point and Drag
+            WebDriverWait(self.driver, timeout).until(
+                lambda d: d.execute_script(
+                    "return document.getElementById('mouseMode') !== null"
+                )
+            )
+            self.driver.execute_script("""
+                var sel = document.getElementById('mouseMode');
+                // 使用原生 setter 以兼容 React 等框架
+                var nativeSetter = Object.getOwnPropertyDescriptor(
+                    HTMLSelectElement.prototype, 'value'
+                ).set;
+                nativeSetter.call(sel, 'pointAndDrag');
+                sel.dispatchEvent(new Event('input', {bubbles: true}));
+                sel.dispatchEvent(new Event('change', {bubbles: true}));
+            """)
+            self.log_info("已将 Mouse Mode 切换为 Point and Drag")
+            time.sleep(0.3)
+
+            # 3. 等待 Lock Mouse 按钮在可视区域内出现
+            lock_rect = WebDriverWait(self.driver, timeout).until(
+                lambda d: d.execute_script("""
+                    var buttons = document.querySelectorAll('button');
+                    var vw = window.innerWidth, vh = window.innerHeight;
+                    for (var btn of buttons) {
+                        if (btn.innerText.trim() === 'Lock Mouse') {
+                            var r = btn.getBoundingClientRect();
+                            if (r.width > 0 && r.height > 0
+                                && r.left >= 0 && r.top >= 0
+                                && r.right <= vw && r.bottom <= vh)
+                                return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+                        }
+                    }
+                    return null;
+                """)
+            )
+
+            # 4. CDP 点击 Lock Mouse 按钮
+            lx, ly = lock_rect["x"], lock_rect["y"]
+            self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                "type": "mousePressed", "x": lx, "y": ly,
+                "button": "left", "buttons": 1, "clickCount": 1, "pointerType": "mouse"
+            })
+            self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                "type": "mouseReleased", "x": lx, "y": ly,
+                "button": "left", "buttons": 0, "clickCount": 1, "pointerType": "mouse"
+            })
+            time.sleep(0.5)
+            self.log_info("已点击 Lock Mouse 按钮")
+        except Exception as e:
+            self.log_warning(f"点击 Lock Mouse 按钮失败: {e}")
 
     def take_screenshot(self) -> bytes:
         """浏览器内截图"""
@@ -1060,44 +648,33 @@ class CloudGameController(GameControllerBase):
             })(arguments[0]);
         """, text)
 
-    def change_auto_battle(self, status: bool) -> None:
-        """从 local storage 中读取并修改 auto battle"""
-        ls = json.loads(self.driver.execute_script("return JSON.stringify(localStorage)"))
-        cloud = json.loads(ls.get("cg_hkrpg_cn_cloudData", "{}"))
-        cloud.setdefault("value", {})
-        save = json.loads(cloud["value"].get("RPGCloudSave", "{}") or "{}")
-        int_dicts = save.get("IntDicts", {})
-
-        int_dicts["OtherSettings_AutoBattleOpen"] = int(status)
-        self.log_debug(f"设置自动战斗为 {'开启' if status else '关闭'}")
-        int_dicts["OtherSettings_IsSaveBattleSpeed"] = int(status)
-        self.log_debug(f"设置自动战斗状态为 {'保存' if status else '不保存'}")
-
-        # 如果存在 App_LastUserID，添加 User_{UID}_SpeedUpOpen 配置
-        uid = int_dicts.get("App_LastUserID")
-        if uid:
-            int_dicts[f"User_{uid}_SpeedUpOpen"] = int(status)
-            self.log_debug(f"设置战斗二倍速为 {'开启' if status else '关闭'}")
-        else:
-            self.log_debug("未检测到 UID，跳过设置战斗二倍速")
-
-        save["IntDicts"] = int_dicts
-        cloud["value"]["RPGCloudSave"] = json.dumps(save)
-        ls["cg_hkrpg_cn_cloudData"] = json.dumps(cloud)
-
-        for k, v in ls.items():
-            self.driver.execute_script(f"localStorage.setItem('{k}', arguments[0]);", v)
+    def _cancel_sunshine_session(self) -> None:
+        """通过浏览器内 fetch 通知 Sunshine 关闭当前串流 session（携带浏览器 cookies）"""
+        if not self.driver:
+            self.log_warning("浏览器未启动，跳过关闭 Sunshine session")
+            return
+        cancel_url = f"{self.MOONLIGHT_BASE_URL}/api/host/cancel"
+        try:
+            result = self.driver.execute_script("""
+                var resp = await fetch(arguments[0], {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({host_id: arguments[1]}),
+                    credentials: 'include'
+                });
+                return {status: resp.status, text: await resp.text()};
+            """, cancel_url, int(self.MOONLIGHT_HOST_ID))
+            if result and result.get("status") == 200:
+                self.log_info("已通知 Sunshine 关闭串流 session")
+            else:
+                self.log_warning(f"关闭 Sunshine session 失败: HTTP {result}")
+        except Exception as e:
+            self.log_warning(f"关闭 Sunshine session 请求异常: {e}")
 
     def stop_game(self) -> bool:
-        """退出游戏，关闭浏览器"""
-        # 删除可能残留的二维码图片
-        try:
-            qr_filename = os.path.join("logs", "qrcode_login.png")
-            if os.path.exists(qr_filename):
-                os.remove(qr_filename)
-                self.log_debug(f"已删除残留的二维码图片: {os.path.abspath(qr_filename)}")
-        except Exception as e:
-            self.log_debug(f"删除二维码图片失败（可忽略）: {e}")
+        """退出游戏，关闭浏览器，并关闭 Sunshine session"""
+        # 先关闭 Sunshine 串流 session
+        self._cancel_sunshine_session()
 
         if self.driver:
             try:

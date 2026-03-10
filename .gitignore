@@ -206,3 +206,7 @@ smtp_temp.bin
 
 # Genshin_StarRail_fps_unlocker
 /3rdparty/Genshin_StarRail_fps_unlocker
+.python-version
+uv.lock
+pyproject.toml
+test_mouse.py
