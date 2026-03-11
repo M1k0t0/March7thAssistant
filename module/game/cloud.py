@@ -518,7 +518,28 @@ class CloudGameController(GameControllerBase):
 
             time.sleep(2)  # 等待页面稳定，避免元素尚未渲染导致的点击失败
 
-            # 1. 点击侧边栏按钮打开菜单
+            # 1. 将 Mouse Mode 切换为 Point and Drag
+            WebDriverWait(self.driver, timeout).until(
+                lambda d: d.execute_script(
+                    "return document.getElementById('mouseMode') !== null"
+                )
+            )
+            self.driver.execute_script("""
+                var sel = document.getElementById('mouseMode');
+                // 使用原生 setter 以兼容 React 等框架
+                var nativeSetter = Object.getOwnPropertyDescriptor(
+                    HTMLSelectElement.prototype, 'value'
+                ).set;
+                nativeSetter.call(sel, 'pointAndDrag');
+                sel.dispatchEvent(new Event('input', {bubbles: true}));
+                sel.dispatchEvent(new Event('change', {bubbles: true}));
+            """)
+            self.log_info("已将 Mouse Mode 切换为 Point and Drag")
+            time.sleep(0.3)
+
+            return # 目前暂时不需要进入沉浸模式，如果后续版本发现需要再次点击，可以去掉这个 return
+
+            # 2. 点击侧边栏按钮打开菜单
             sidebar_rect = WebDriverWait(self.driver, timeout).until(
                 lambda d: d.execute_script("""
                     var btn = document.getElementById('sidebar-button');
@@ -537,25 +558,6 @@ class CloudGameController(GameControllerBase):
                 "button": "left", "buttons": 0, "clickCount": 1, "pointerType": "mouse"
             })
             time.sleep(0.5)
-
-            # 2. 将 Mouse Mode 切换为 Point and Drag
-            WebDriverWait(self.driver, timeout).until(
-                lambda d: d.execute_script(
-                    "return document.getElementById('mouseMode') !== null"
-                )
-            )
-            self.driver.execute_script("""
-                var sel = document.getElementById('mouseMode');
-                // 使用原生 setter 以兼容 React 等框架
-                var nativeSetter = Object.getOwnPropertyDescriptor(
-                    HTMLSelectElement.prototype, 'value'
-                ).set;
-                nativeSetter.call(sel, 'pointAndDrag');
-                sel.dispatchEvent(new Event('input', {bubbles: true}));
-                sel.dispatchEvent(new Event('change', {bubbles: true}));
-            """)
-            self.log_info("已将 Mouse Mode 切换为 Point and Drag")
-            time.sleep(0.3)
 
             # 3. 等待 Lock Mouse 按钮在可视区域内出现
             lock_rect = WebDriverWait(self.driver, timeout).until(

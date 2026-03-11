@@ -277,6 +277,7 @@ class Screen(metaclass=SingletonMeta):
                 time.sleep(self.wait_screen_change_time)
                 break
             time.sleep(0.5)
+            auto.mouse_move(10, 10)  # 防止因鼠标遮挡界面元素导致的识别失败
         else:
             self.wait_screen_change_time = 1
             if max_recursion > 0:

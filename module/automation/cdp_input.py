@@ -107,6 +107,7 @@ class CdpInput(InputBase):
 
     def mouse_click(self, x, y):
         self.mouse_down(x, y)
+        time.sleep(0.05)
         self.mouse_up()
         self.logger.debug(f"鼠标点击 ({x}, {y})")
 
@@ -115,7 +116,7 @@ class CdpInput(InputBase):
         count 次数，一次大概 10 像素
         direction -1 为向下滚，1 为向上滚
         """
-        deltaY = -10 * direction / abs(direction)
+        deltaY = -100 * direction / abs(direction)
         try:
             for i in range(count):
                 self.cloud_game.execute_cdp_cmd("Input.dispatchMouseEvent", {
