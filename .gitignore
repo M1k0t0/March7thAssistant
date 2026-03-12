@@ -210,3 +210,4 @@ smtp_temp.bin
 uv.lock
 pyproject.toml
 test_mouse.py
+test_cdp_click.py

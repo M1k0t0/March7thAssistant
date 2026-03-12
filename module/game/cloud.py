@@ -215,6 +215,7 @@ class CloudGameController(GameControllerBase):
             f"--app={self.GAME_URL}",   # 以应用模式启动
             "--disable-blink-features=AutomationControlled",  # 去除自动化痕迹，防止被人机验证
             f"--remote-debugging-port={self.cfg.browser_debug_port}",   # 调试端口，可用于复用浏览器
+            "--remote-allow-origins=*",   # 允许 WebSocket 跨域连接（CDP 输入需要）
         ]
         if self.cfg.browser_persistent_enable:
             args += [

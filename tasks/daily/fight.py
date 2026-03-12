@@ -89,8 +89,9 @@ class Fight:
             return False
 
         if cfg.cloud_game_enable and cfg.browser_headless_enable:
-            log.error("锄大地不支持无界面模式运行")
-            return False
+            pass
+            # log.error("锄大地不支持无界面模式运行")
+            # return False
 
         if Fight.before_start():
             # 切换队伍

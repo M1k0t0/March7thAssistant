@@ -45,5 +45,13 @@ def auto_config():
             config['allow_snack_buy'] = cfg.fight_allow_snack_buy
         if cfg.fight_main_map != "0":
             config['main_map'] = cfg.fight_main_map
-        with open(os.path.join(cfg.fight_path, "config.json"), 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=4)
+
+    # 将浏览器 CDP 调试端口传递给 Fhoe-Rail，使其能在云游戏后台模式下通过 CDP 发送输入
+    if hasattr(cfg, 'browser_debug_port'):
+        config['cdp_debug_port'] = cfg.browser_debug_port
+        config['cloud_game_background'] = True
+    else:
+        config['cloud_game_background'] = False
+
+    with open(os.path.join(cfg.fight_path, "config.json"), 'w', encoding='utf-8') as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
