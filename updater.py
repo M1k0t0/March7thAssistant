@@ -23,8 +23,8 @@ class Updater:
         self.logger = logger
         self.process_names = ["March7th Assistant.exe", "March7th Launcher.exe", "flet.exe", "gui.exe", "Fhoe-Rail.exe", "chromedriver.exe", "PaddleOCR-json.exe"]
         self.api_urls = [
-            "https://api.github.com/repos/moesnow/March7thAssistant/releases/latest",
-            "https://github.kotori.top/https://api.github.com/repos/moesnow/March7thAssistant/releases/latest",
+            "https://api.github.com/repos/M1k0t0/March7thAssistant/releases/latest",
+            "https://github.kotori.top/https://api.github.com/repos/M1k0t0/March7thAssistant/releases/latest",
         ]
         self.temp_path = os.path.abspath("./temp")
         os.makedirs(self.temp_path, exist_ok=True)
