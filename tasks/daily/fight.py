@@ -22,7 +22,7 @@ class Fight:
         if cfg.fight_operation_mode == "exe":
             import requests
             import json
-            response = requests.get(FastestMirror.get_github_api_mirror("linruowuyin", "Fhoe-Rail"), timeout=10, headers=cfg.useragent)
+            response = requests.get(FastestMirror.get_github_api_mirror("M1k0t0", "Fhoe-Rail"), timeout=10, headers=cfg.useragent)
             if response.status_code == 200:
                 data = json.loads(response.text)
                 url = None
@@ -40,7 +40,7 @@ class Fight:
         elif cfg.fight_operation_mode == "source":
             cfg.set_value("fight_requirements", False)
             url = FastestMirror.get_github_mirror(
-                "https://github.com/linruowuyin/Fhoe-Rail/archive/master.zip")
+                "https://github.com/M1k0t0/Fhoe-Rail/archive/master.zip")
             update_handler = UpdateHandler(url, cfg.fight_path, "Fhoe-Rail-master")
             update_handler.run()
 
