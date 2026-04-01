@@ -1038,5 +1038,12 @@
     "图片模板": "Image template",
     "可选参数，图片消息模板，{image} 会替换为 Base64": "Optional: image message template, {image} will be replaced with Base64",
     "数据模板": "Data template",
-    "请求体模板，{message} 会替换为标题和内容": "Request body template, {message} will be replaced with title and content"
+    "请求体模板，{message} 会替换为标题和内容": "Request body template, {message} will be replaced with title and content",
+    "通知合并": "Notification merge",
+    "开启后，完整运行结束时将所有通知合并为一条发送": "When enabled, all notifications are merged and sent as one message after a full run completes.",
+    "推送图片": "Send images with notifications",
+    "关闭后推送消息时不再发送截图": "Do not include screenshots when sending notifications",
+    "启用消息推送": "Enable notifications",
+    "消息推送总开关": "Notification master switch",
+    "自动战斗检测 (检测到未自动战斗时按V开启)": "Auto Battle Detection (Press V when auto-battle is off)"
 }
