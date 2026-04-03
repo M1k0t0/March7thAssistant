@@ -225,8 +225,7 @@ class Screen(metaclass=SingletonMeta):
         # self.logger.error("如果游戏是从本地启动：")
         if not cfg.cloud_game_enable:
             self.logger.error("请关闭帧率监控HUD、微星小飞机、游戏加加、HDR或N卡游戏滤镜等等任何可能影响游戏画面的软件")
-            self.logger.error("如果是多显示器，可尝试开关选项 设置-杂项-在多显示器上进行截屏")
-            self.logger.error("你还可以通过 工具箱-游戏截图 判断当前游戏画面是否被正确获取")
+            self.logger.error("你可以通过 工具箱-游戏截图 判断当前游戏画面是否被正确获取")
         # self.logger.error("如果是云·星穹铁道：")
         else:
             self.logger.error("使用云·星穹铁道请确保网络正常，浏览器能正常加载游戏画面")
@@ -244,6 +243,15 @@ class Screen(metaclass=SingletonMeta):
         获取从当前界面到下一个界面的操作序列
         """
         return [action["actions_list"] for action in self.screen_map[current_screen]['actions'] if action["target_screen"] == next_screen][0]
+
+    def get_timeout_operations(self, current_screen, next_screen):
+        """
+        获取从当前界面切换到下一个界面超时后的操作序列（可选）
+        """
+        for action in self.screen_map[current_screen]['actions']:
+            if action["target_screen"] == next_screen:
+                return action.get("actions_list_on_timeout", [])
+        return []
 
     def perform_operations(self, operations):
         """
@@ -266,9 +274,10 @@ class Screen(metaclass=SingletonMeta):
             except Exception as e:
                 self.logger.debug(f"未知的操作: {e}")
 
-    def wait_for_screen_change(self, next_screen, max_recursion=2):
+    def wait_for_screen_change(self, next_screen, max_recursion=2, timeout_operations=None):
         """
         等待界面切换，如果未成功则根据重试次数决定是否重试
+        :param timeout_operations: 超时后执行的可选操作列表，执行后会再次检测界面
         """
         for _ in range(20):
             self.logger.debug(f"等待：{self.get_name(next_screen)}")
@@ -279,6 +288,16 @@ class Screen(metaclass=SingletonMeta):
             time.sleep(0.5)
             auto.mouse_move(10, 10)  # 防止因鼠标遮挡界面元素导致的识别失败
         else:
+            if timeout_operations:
+                self.logger.warning(f"切换到 {self.get_name(next_screen)} 超时，执行超时操作后重新检测")
+                self.perform_operations(timeout_operations)
+                for _ in range(20):
+                    self.logger.debug(f"等待：{self.get_name(next_screen)}")
+                    if self.check_screen(next_screen):
+                        self.logger.info(f"切换到：{green(self.get_name(next_screen))}")
+                        time.sleep(self.wait_screen_change_time)
+                        return
+                    time.sleep(0.5)
             self.wait_screen_change_time = 1
             if max_recursion > 0:
                 self.logger.warning(f"切换到 {self.get_name(next_screen)} 超时，准备重试")
@@ -291,8 +310,9 @@ class Screen(metaclass=SingletonMeta):
         执行从当前界面到下一个界面的切换操作，并处理重试逻辑
         """
         operations = self.get_operations(current_screen, next_screen)
+        timeout_operations = self.get_timeout_operations(current_screen, next_screen)
         self.perform_operations(operations)
-        self.wait_for_screen_change(next_screen, max_recursion)
+        self.wait_for_screen_change(next_screen, max_recursion, timeout_operations or None)
 
     def _navigate_through_path(self, path, max_recursion):
         """
@@ -306,7 +326,7 @@ class Screen(metaclass=SingletonMeta):
 
     def change_to(self, target_screen, max_recursion=2):
         """
-        切换到目标界面，，如果失败则退出进程
+        切换到目标界面，如果失败则退出进程
         :param target_screen: 目标界面
         :param max_recursion: 重试次数
         """
