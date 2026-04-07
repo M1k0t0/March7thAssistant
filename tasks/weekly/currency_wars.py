@@ -269,7 +269,8 @@ class CurrencyWars:
         log.info("选择关卡")
         # 避免低性能设备加载过慢
         time.sleep(6)  # 等待界面加载
-        pos = auto.find_element("./assets/images/screen/currency_wars/level_down.png", "image", 100000)
+        # pos = auto.find_element("./assets/images/screen/currency_wars/level_down.png", "image", 100000)
+        pos = auto.find_element((936 / 1920, 830 / 1080, 45 / 1920, 31 / 1080), "crop")
         for _ in range(40):
             if auto.find_element(f"./assets/images/screen/currency_wars/level_1.png", "image", 0.95, crop=(440.0 / 1920, 892.0 / 1080, 385.0 / 1920, 137.0 / 1080)):
                 log.info(f"已选择敌人难度为1的关卡")
@@ -360,6 +361,8 @@ class CurrencyWars:
                 self.equip_weapons()
                 auto.click_element('出战', 'text', None, 10, crop=(1744.0 / 1920, 737.0 / 1080, 165.0 / 1920, 71.0 / 1080))
                 time.sleep(2)
+                if auto.click_element("本局不再提示", "text", crop=(905 / 1920, 571 / 1080, 171 / 1920, 50 / 1080)):
+                    time.sleep(1)
                 auto.click_element("./assets/images/zh_CN/base/confirm.png", "image", 0.9)
 
     def give_up_and_settle(self):
@@ -446,6 +449,14 @@ class CurrencyWars:
         """
         装备武器
         """
+        if cfg.currencywars_fast_mode:
+            if ((cfg.currencywars_type == "normal"
+                 and self.current_stage not in ("1-9", "2-7", "3-7"))
+                    or (cfg.currencywars_type == "overclock"
+                        and self.current_stage not in ("1-6", "2-5", "3-5"))):
+                log.info("当前为速通模式且非首领节点，跳过装备武器步骤")
+                return
+
         character_groups = [
             (self.forward_characters, self.forward_pos),
             (self.backward_characters, self.backward_pos)
@@ -1111,12 +1122,16 @@ class CurrencyWars:
             if auto.find_element(('武装箱', '星徽秘典'), "text", None, crop=(1012.0 / 1920, 27.0 / 1080, 173.0 / 1920, 56.0 / 1080), include=True):
                 pos = (533.0 / 1920, 135.0 / 1080, 258.0 / 1920, 181.0 / 1080)
                 auto.click_element(pos, "crop")
-                time.sleep(1)
+                time.sleep(2)
             # 聘用书坐标尚未经过测试
             if auto.find_element("聘用书", "text", None, crop=(923.0 / 1920, 21.0 / 1080, 168.0 / 1920, 74.0 / 1080), include=True):
                 pos = (486.0 / 1920, 159.0 / 1080, 240.0 / 1920, 269.0 / 1080)
                 auto.click_element(pos, "crop")
-                time.sleep(1)
+                time.sleep(2)
+            if auto.find_element("专家邀请函", "text", None, crop=(949 / 1920, 27 / 1080, 153 / 1920, 56 / 1080), include=True):
+                pos = (769 / 1920, 134 / 1080, 245 / 1920, 276 / 1080)
+                auto.click_element(pos, "crop")
+                time.sleep(2)
             res = auto.find_element("开启", "text", None, crop=(376.0 / 1920, 839.0 / 1080, 1125.0 / 1920, 148.0 / 1080), include=True)
 
     def check_character_status(self):
@@ -1303,8 +1318,8 @@ class CurrencyWars:
                     auto.click_element(button_positions_click[button_positions.index(pos)], 'crop')
                     has_choose = True
                     log.info(f"未检测到图鉴未收集选项，选择第{button_positions.index(pos) + 1}个按钮")
+                    self.check_special_characters(button_positions[button_positions.index(pos)])
                     break
-                self.check_special_characters(button_positions[0])
 
             if not has_choose:
                 log.error("所有选项均不可选，尝试退出")

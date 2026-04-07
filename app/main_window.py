@@ -122,12 +122,16 @@ class MainWindow(MSFluentWindow):
         self.setMinimumWidth(min_width)
         self.setMinimumHeight(min_height)
 
+        window_memory = cfg.get_value('window_memory', 'size')
         # 从配置文件读取窗口尺寸，确保不低于最小值
-        saved_width = cfg.get_value('window_width', min_width)
-        saved_height = cfg.get_value('window_height', min_height)
-        window_width = max(saved_width, min_width)
-        window_height = max(saved_height, min_height)
-        self.resize(window_width, window_height)
+        if window_memory in ('size', 'size_and_position'):
+            saved_width = cfg.get_value('window_width', min_width)
+            saved_height = cfg.get_value('window_height', min_height)
+            window_width = max(saved_width, min_width)
+            window_height = max(saved_height, min_height)
+            self.resize(window_width, window_height)
+        else:
+            self.resize(min_width, min_height)
 
         self.setWindowIcon(QIcon('./assets/logo/March7th.ico'))
         self.setWindowTitle("March7th Assistant")
@@ -140,10 +144,22 @@ class MainWindow(MSFluentWindow):
 
         screen = QApplication.primaryScreen().availableGeometry()
         w, h = screen.width(), screen.height()
-        self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
+
+        saved_x = cfg.get_value('window_x', None)
+        saved_y = cfg.get_value('window_y', None)
+
+        if window_memory in ('position', 'size_and_position') and saved_x is not None and saved_y is not None:
+            # 确保窗口在屏幕可见范围内（当窗口比屏幕大时退回到左上角）
+            max_x = max(screen.left(), screen.right() - self.width())
+            max_y = max(screen.top(), screen.bottom() - self.height())
+            restored_x = max(screen.left(), min(int(saved_x), max_x))
+            restored_y = max(screen.top(), min(int(saved_y), max_y))
+            self.move(restored_x, restored_y)
+        else:
+            self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
 
         # 根据配置决定窗口显示方式
-        if cfg.get_value('window_maximized', False):
+        if window_memory in ('size', 'size_and_position') and cfg.get_value('window_maximized', False):
             self.showMaximized()
         else:
             self.show()
@@ -369,15 +385,21 @@ class MainWindow(MSFluentWindow):
         self._do_quit()
 
     def _saveWindowState(self):
-        """保存窗口尺寸和最大化状态到配置文件"""
+        """保存窗口尺寸、位置和最大化状态到配置文件"""
         try:
             is_maximized = self.isMaximized()
             cfg.set_value('window_maximized', is_maximized)
 
-            # 只在非最大化状态下保存窗口尺寸
+            window_memory = cfg.get_value('window_memory', 'size')
+
+            # 只在非最大化状态下保存窗口尺寸和位置
             if not is_maximized:
-                cfg.set_value('window_width', self.width())
-                cfg.set_value('window_height', self.height())
+                if window_memory in ('size', 'size_and_position'):
+                    cfg.set_value('window_width', self.width())
+                    cfg.set_value('window_height', self.height())
+                if window_memory in ('position', 'size_and_position'):
+                    cfg.set_value('window_x', self.x())
+                    cfg.set_value('window_y', self.y())
         except Exception:
             pass
 
@@ -397,9 +419,9 @@ class MainWindow(MSFluentWindow):
             except Exception:
                 pass
 
-            # 更新日志界面的热键
+            # 更新日志界面的热键与日志悬浮窗开关
             if hasattr(self, 'logInterface'):
-                self.logInterface.updateHotkey()
+                self.logInterface.reloadConfigState()
 
             # 保存旧的设置界面引用
             old_setting_interface = self.settingInterface
