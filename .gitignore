@@ -211,3 +211,4 @@ uv.lock
 pyproject.toml
 test_mouse.py
 test_cdp_click.py
+*.7z
