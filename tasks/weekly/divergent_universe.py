@@ -54,11 +54,12 @@ class DivergentUniverse:
             return False
 
         score_parts = score.split('/')
-        if len(score_parts) == 2 and score_parts[0].isdigit() and score_parts[1].isdigit() and score_parts[1] == "14000":
-            log.info(f"差分宇宙积分：{score_parts[0]} / {score_parts[1]}")
-            if score_parts[0] == "14000":
+        if len(score_parts) == 2 and score_parts[0].isdigit() and score_parts[1].isdigit() and score_parts[1] in ("12000", "14000"):
+            max_score = score_parts[1]
+            log.info(f"差分宇宙积分：{score_parts[0]} / {max_score}")
+            if score_parts[0] == max_score:
                 cfg.save_timestamp("weekly_divergent_timestamp")
-                log.info("已达到最高积分 14000，记录时间")
+                log.info(f"已达到最高积分 {max_score}，记录时间")
                 return True
         else:
             log.warning(f"无法解析差分宇宙积分: {score}")
@@ -133,6 +134,11 @@ class DivergentUniverse:
             log.error("选择关卡失败，结束任务")
             return False
 
+        if type == "normal" and int(cfg.weekly_divergent_level) == 6:
+            if not auto.click_element("./assets/images/screen/divergent_universe/astronomical.png", "image", 0.9, 10):
+                log.error("未找到进入星阶模式按钮，结束任务")
+                return False
+
         if not auto.click_element("./assets/images/screen/divergent_universe/start.png", "image", 0.9, 10):
             log.error("未找到开始对局按钮，结束任务")
             return False
@@ -154,8 +160,13 @@ class DivergentUniverse:
             (93 / 1920, 253 / 1080, 68 / 1920, 68 / 1080),
             (92 / 1920, 362 / 1080, 68 / 1920, 67 / 1080),
             (94 / 1920, 469 / 1080, 67 / 1920, 67 / 1080),
-            (93 / 1920, 580 / 1080, 68 / 1920, 64 / 1080)
+            (93 / 1920, 580 / 1080, 68 / 1920, 64 / 1080),
+            (93 / 1920, 689 / 1080, 68 / 1920, 64 / 1080)
         ]
+
+        if type == "cycle" and level == 6:
+            log.info("周期演算不开启阈值协议，难度 6 视为难度 5")
+            level = 5
 
         if auto.click_element(level_positions[level - 1], 'crop'):
             log.info(f"已选择难度 {level} 的关卡")
@@ -168,7 +179,6 @@ class DivergentUniverse:
                     else:
                         break
             return True
-
         return False
 
     def loop(self) -> bool:
@@ -301,6 +311,8 @@ class DivergentUniverse:
                             break
                     auto.press_key("w", 2)
                     self.process_battle_stage_finish()
+                elif "事件" in station or "异常" in station or "奖励" in station or "铸造" in station:
+                    self.process_event_stage()
                 else:
                     log.info("检测到暂不支持的区域类型")
                     self.unsupported_area = True
@@ -334,7 +346,202 @@ class DivergentUniverse:
             elif self.process_stage:
                 if "首领" in station or "战斗" in station or "精英" in station or "转化" in station:
                     self.process_battle_stage_finish()
+                if "事件" in station or "异常" in station or "奖励" in station or "铸造" in station:
+                    self.process_battle_stage_finish()
             return
+
+    def detect_events(self):
+        """使用YOLO检测所有事件目标。"""
+        return auto.find_element(
+            target={"model_path": "./assets/model/divergent.onnx", "names": ["door", "event"], "target_class": "event"},
+            find_type="yolo_with_multiple_targets",
+            threshold=0.2
+        )
+
+    def find_closest_event(self, events, screen_center_x):
+        """从事件列表中找到距离屏幕中心最近的事件。"""
+        if not events:
+            return None
+        closest = None
+        min_dist = float('inf')
+        for top_left, bottom_right in events:
+            center_x = (top_left[0] + bottom_right[0]) // 2
+            dist = abs(center_x - screen_center_x)
+            if dist < min_dist:
+                min_dist = dist
+                closest = (top_left, bottom_right)
+        return closest
+
+    def process_event_stage(self):
+        stable_mode = cfg.cloud_game_enable or cfg.weekly_divergent_stable_mode
+        window = Screenshot.get_window(cfg.game_title_name)
+        win_x, _, width, _ = Screenshot.get_window_region(window)
+        screen_center_x = win_x + width // 2
+        tolerance = width // 12
+        fine_tolerance = width // 15
+        f_crop = (1078 / 1920, 595 / 1080, 37 / 1920, 37 / 1080)
+
+        event_count = 0
+        timeout_retries = 0
+
+        while event_count < 5:
+            log.info(f"事件处理第 {event_count + 1}/5 轮（超时重试 {timeout_retries}/3）")
+
+            # 检测所有事件
+            time.sleep(4)
+            events = self.detect_events()
+            if not events:
+                log.info("未检测到任何事件，尝试向前移动后重试")
+                auto.press_key("w", 1)
+                events = self.detect_events()
+                if not events:
+                    log.info("未检测到任何事件，事件处理完成")
+                    self.process_stage = True
+                    return
+
+            log.info(f"检测到 {len(events)} 个事件")
+
+            # 找到距离屏幕中心最近的事件
+            closest = self.find_closest_event(events, screen_center_x)
+            top_left, bottom_right = closest
+            event_center_x = (top_left[0] + bottom_right[0]) // 2
+
+            # 左右移动，将事件对齐到屏幕中心
+            if abs(event_center_x - screen_center_x) > tolerance:
+                key = "a" if event_center_x < screen_center_x else "d"
+                log.debug(f"事件在屏幕{'左边' if key == 'a' else '右边'}，正在调整位置")
+                if stable_mode:
+                    start_time = time.monotonic()
+                    while time.monotonic() - start_time < 10:
+                        auto.press_key(key, wait_time=0.15)
+                        events = self.detect_events()
+                        if not events:
+                            break
+                        closest = self.find_closest_event(events, screen_center_x)
+                        if not closest:
+                            break
+                        top_left, bottom_right = closest
+                        event_center_x = (top_left[0] + bottom_right[0]) // 2
+                        if abs(event_center_x - screen_center_x) <= tolerance:
+                            log.debug("事件已调整到屏幕中间")
+                            break
+                else:
+                    auto.press_key_down(key)
+                    try:
+                        start_time = time.monotonic()
+                        while time.monotonic() - start_time < 10:
+                            time.sleep(0.1)
+                            events = self.detect_events()
+                            if not events:
+                                break
+                            closest = self.find_closest_event(events, screen_center_x)
+                            if not closest:
+                                break
+                            top_left, bottom_right = closest
+                            event_center_x = (top_left[0] + bottom_right[0]) // 2
+                            if abs(event_center_x - screen_center_x) <= tolerance:
+                                log.debug("事件已调整到屏幕中间")
+                                break
+                    finally:
+                        auto.press_key_up(key)
+            else:
+                log.debug("事件已在屏幕中间")
+
+            # 向事件走去，边走边检测F图标和事件位置
+            event_interacted = False
+
+            timeout = 60 if stable_mode else 15
+
+            if not stable_mode:
+                auto.press_key_down("w")
+
+            try:
+                start_time = time.monotonic()
+                while time.monotonic() - start_time < timeout:
+                    # 检测F交互图标
+                    if auto.find_element("./assets/images/screen/divergent_universe/f.png", "image", 0.9, crop=f_crop):
+                        log.debug("检测到F交互图标")
+                        if not stable_mode:
+                            auto.press_key_up("w")
+                        if auto.find_element("事件", "text", crop=(1205 / 1920, 589 / 1080, 193 / 1920, 49 / 1080), include=True):
+                            auto.press_key("f")
+                            time.sleep(2)
+                            event_start_time = time.monotonic()
+                            # for _ in range(100):
+                            while time.monotonic() - event_start_time < 30 * 60:  # 最多等待30分钟 应该不会有人战斗能打半小时吧
+                                if self.check_click_close() or self.check_title() or self.check_auto_battle():
+                                    time.sleep(2)
+                                elif auto.find_element("./assets/images/screen/divergent_universe/stage.png", "image", 0.9, crop=(33 / 1920, 52 / 1080, 68 / 1920, 60 / 1080)):
+                                    break
+                                else:
+                                    time.sleep(2)
+                            event_interacted = True
+                            break
+                        else:
+                            if not stable_mode:
+                                auto.press_key_down("w")
+                            time.sleep(0.5)
+
+                    # 细微调整方向
+                    events = self.detect_events()
+                    if events:
+                        closest = self.find_closest_event(events, screen_center_x)
+                        if closest:
+                            top_left, bottom_right = closest
+                            event_center_x = (top_left[0] + bottom_right[0]) // 2
+                            offset = event_center_x - screen_center_x
+                            if abs(offset) > fine_tolerance:
+                                adjust_key = "a" if offset < 0 else "d"
+                                if stable_mode:
+                                    auto.press_key_down("w")
+                                auto.press_key(adjust_key, wait_time=0.15)
+                                if stable_mode:
+                                    auto.press_key_up("w")
+                            else:
+                                if stable_mode:
+                                    auto.press_key("w")
+            finally:
+                if not stable_mode:
+                    auto.press_key_up("w")
+
+            if event_interacted:
+                # 事件交互后视角会变化，且不容易判断是否还有其他事件
+                # 重进关卡是最简单粗暴的解决办法，能大大提高稳定性
+                log.info("事件交互成功，重新进入关卡")
+                self.process_re_enter()
+                event_count += 1
+                timeout_retries = 0
+            else:
+                timeout_retries += 1
+                if timeout_retries >= 3:
+                    log.info("事件连续超时3次，尝试离开关卡")
+                    self.process_leave()
+                    return
+                log.info(f"事件超时（第 {timeout_retries}/3 次），重新进入关卡重试")
+
+                if auto.find_element("./assets/images/share/base/F.png", "image", 0.9, crop=(998.0 / 1920, 473.0 / 1080, 392.0 / 1920, 296.0 / 1080)) and auto.find_element(("战利品", "混沌药箱"), "text", crop=(1205 / 1920, 589 / 1080, 193 / 1920, 49 / 1080), include=True):
+                    log.info(f"检测到{auto.matched_text}，尝试点击")
+                    auto.press_key("f")
+                    time.sleep(2)
+                    for _ in range(100):
+                        if self.check_click_close() or self.check_title():
+                            time.sleep(2)
+                        else:
+                            break
+
+                time.sleep(1)
+                auto.press_mouse()
+                time.sleep(2)
+                for _ in range(100):
+                    if self.check_click_close() or self.check_title():
+                        time.sleep(2)
+                    else:
+                        break
+
+                self.process_re_enter()
+
+        log.info("事件处理超过5轮，尝试离开关卡")
+        self.process_leave()
 
     def process_battle_stage(self):
         for _ in range(3):
@@ -522,6 +729,11 @@ class DivergentUniverse:
         log.error("多次尝试重新进入关卡失败")
 
     def detect_random_door(self):
+        return auto.find_element(
+            target={"model_path": "./assets/model/divergent.onnx", "names": ["door", "event"], "target_class": "door"},
+            find_type="yolo",
+            threshold=0.01
+        )
         # LOWER = np.array([112, 82, 174])
         # UPPER = np.array([170, 126, 239])
         # crop = (68 / 1920, 4 / 1080, 1718 / 1920, 818 / 1080)
@@ -554,11 +766,10 @@ class DivergentUniverse:
             key = "a" if door_center_x < screen_center_x else "d"
             log.debug(f"随意门在屏幕{'左边' if key == 'a' else '右边'}，正在调整位置")
 
-            auto.press_key_down(key)
-            try:
+            if stable_mode:
                 start_time = time.monotonic()
                 while time.monotonic() - start_time < 10:
-                    time.sleep(0.1)
+                    auto.press_key(key, wait_time=0.15)
                     result = self.detect_random_door()
                     if not result:
                         return False
@@ -567,8 +778,22 @@ class DivergentUniverse:
                     if abs(door_center_x - screen_center_x) <= tolerance:
                         log.debug("随意门已调整到屏幕中间")
                         break
-            finally:
-                auto.press_key_up(key)
+            else:
+                auto.press_key_down(key)
+                try:
+                    start_time = time.monotonic()
+                    while time.monotonic() - start_time < 10:
+                        time.sleep(0.1)
+                        result = self.detect_random_door()
+                        if not result:
+                            return False
+                        top_left, bottom_right = result
+                        door_center_x = (top_left[0] + bottom_right[0]) // 2
+                        if abs(door_center_x - screen_center_x) <= tolerance:
+                            log.debug("随意门已调整到屏幕中间")
+                            break
+                finally:
+                    auto.press_key_up(key)
 
         # 向随意门走去，边走边检测F图标和门的位置
         f_crop = (1078 / 1920, 595 / 1080, 37 / 1920, 37 / 1080)
@@ -581,6 +806,8 @@ class DivergentUniverse:
 
         if not stable_mode:
             auto.press_key_down("w")
+            # time.sleep(0.2)
+            # auto.press_key_down("shift")
         # else:
         #     auto.press_key("w", 1.5)
 
@@ -599,6 +826,7 @@ class DivergentUniverse:
                     log.debug("检测到F交互图标")
                     if not stable_mode:
                         auto.press_key_up("w")
+                        # auto.press_key_up("shift")
 
                     if auto.find_element("./assets/images/screen/divergent_universe/door.png", "image", 0.9, crop=door_crop):
                         auto.press_key("f")
@@ -614,6 +842,8 @@ class DivergentUniverse:
                     else:
                         if not stable_mode:
                             auto.press_key_down("w")
+                            # time.sleep(0.2)
+                            # auto.press_key_down("shift")
                         # else:
                         #     auto.press_key("w", 1)
                         time.sleep(0.5)
@@ -637,7 +867,9 @@ class DivergentUniverse:
                     if stable_mode:
                         auto.press_key("w")
         finally:
-            auto.press_key_up("w")
+            if not stable_mode:
+                auto.press_key_up("w")
+                # auto.press_key_up("shift")
         return False
 
     def check_title(self):
@@ -776,6 +1008,10 @@ class DivergentUniverse:
             (757 / 1920, 242 / 1080, 410 / 1920, 610 / 1080),
             (1235 / 1920, 242 / 1080, 410 / 1920, 610 / 1080),
         ]
+        relic2_positions = [
+            (517 / 1920, 242 / 1080, 409 / 1920, 610 / 1080),
+            (997 / 1920, 241 / 1080, 405 / 1920, 609 / 1080)
+        ]
 
         time.sleep(2)
         has_choose = False
@@ -788,6 +1024,7 @@ class DivergentUniverse:
 
         if not has_choose:
             log.info("未检测到优先可选项，默认选择中间的奇物")
+            auto.click_element(relic2_positions[0], 'crop')
             auto.click_element(relic_positions[1], 'crop')
             has_choose = True
 
@@ -804,8 +1041,13 @@ class DivergentUniverse:
             (757 / 1920, 242 / 1080, 410 / 1920, 610 / 1080),
             (1235 / 1920, 242 / 1080, 410 / 1920, 610 / 1080),
         ]
+        relic2_positions = [
+            (517 / 1920, 242 / 1080, 409 / 1920, 610 / 1080),
+            (997 / 1920, 241 / 1080, 405 / 1920, 609 / 1080)
+        ]
 
         log.info("尝试丢弃中间的奇物")
+        auto.click_element(relic2_positions[0], 'crop')
         auto.click_element(relic_positions[1], 'crop')
         time.sleep(1)
         auto.click_element('丢弃', 'text', None, 10, crop=(1695 / 1920, 948 / 1080, 69 / 1920, 50 / 1080), include=True)
@@ -853,7 +1095,7 @@ class DivergentUniverse:
         ]
         re_extract_crop = (560 / 1920, 940 / 1080, 374 / 1920, 56 / 1080)
 
-        for _ in range(20):
+        for _ in range(5):
             time.sleep(2)
             has_priority_station = False
 
@@ -872,26 +1114,41 @@ class DivergentUniverse:
             # 根据优先级选择点击哪个站点，若优先级相同，点击中间的站点
             priority_map = {
                 "首领": 0,
+                "休整": 0,
                 "转化": 0,
-                "战斗": 1,
-                "精英": 1,
-                "休整": 2,
-                "空白": 3,
-                "商店": 3,
-                "财富": 4,
-                # "异常": 7,
-                # "事件": 8,
             }
+            disabled_stations = set()
+
+            if cfg.divergent_station_priority_enable:
+                custom_priority = cfg.divergent_station_priority
+                for name, prio in custom_priority.items():
+                    priority_map[name] = prio
+                disabled_stations = set(cfg.divergent_station_disabled)
+            else:
+                priority_map.update({
+                    "战斗": 1,
+                    "精英": 1,
+                    "事件": 2,
+                    "奖励": 2,
+                    "异常": 2,
+                    "铸造": 2,
+                    "空白": 3,
+                    "商店": 3,
+                    "财富": 3,
+                })
 
             # 获取每个站点的优先级，None 的优先级设为最低（优先级最高）
+            # 禁用的站点优先级设为极高值（仅在没有重抽次数时才会被选择）
             station_priorities = []
             for tag in station_tags:
                 if tag is None:
                     station_priorities.append(float('inf'))
+                elif tag in disabled_stations:
+                    station_priorities.append(99)
                 else:
                     if tag in priority_map:
                         has_priority_station = True
-                    station_priorities.append(priority_map.get(tag, 7))  # 其他标签优先级同为 7
+                    station_priorities.append(priority_map.get(tag, 100))
 
             if not has_priority_station:
                 if not auto.find_element("重抽0", "text", crop=re_extract_crop) and not auto.find_element("0", "text", crop=re_extract_crop):
