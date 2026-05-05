@@ -8,6 +8,7 @@ load_language()
 # 可用的任务列表（任务ID -> 任务名称）
 AVAILABLE_TASKS = {
     "main": tr("完整运行"),
+    "routine": tr("日常"),
     "daily": tr("每日实训"),
     "power": tr("清体力"),
     "game_update": tr("更新游戏"),
@@ -31,6 +32,7 @@ AVAILABLE_TASKS = {
     "game": tr("启动游戏"),
     "notify": tr("测试消息推送"),
     "redemption": tr("兑换码"),
+    "app_update": tr("更新三月七小助手"),
 }
 
 # 任务名称本地化映射（兼容旧名称）

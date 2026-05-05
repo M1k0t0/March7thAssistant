@@ -23,7 +23,7 @@ import datetime
 
 class Daily:
     @staticmethod
-    def start():
+    def prepare_daily(ignore_refresh=False):
         if cfg.reward_enable and cfg.reward_redemption_code_enable:
             Redemption.get()
 
@@ -33,7 +33,7 @@ class Daily:
 
         # 在日常任务中检查是否使用支援角色
         if cfg.daily_enable:
-            if Date.is_next_x_am(cfg.last_run_timestamp, cfg.refresh_hour):
+            if ignore_refresh or Date.is_next_x_am(cfg.last_run_timestamp, cfg.refresh_hour):
                 Daily.lookup()
             else:
                 log.info("每日实训尚未刷新")
@@ -42,29 +42,72 @@ class Daily:
 
         activity.start()
 
-        # 优先历战余响
-        if cfg.echo_of_war_enable:
-            if Date.is_next_mon_x_am(cfg.echo_of_war_timestamp, cfg.refresh_hour):
-                # 注意，这里并没有解决每天开始时间。也就是4点开始。按照真实时间进行执行
-                isoweekday = datetime.date.today().isoweekday()
-                if isoweekday >= cfg.echo_of_war_start_day_of_week:
-                    Echoofwar.start()
+        if cfg.power_enable:
+            # 优先历战余响
+            if cfg.echo_of_war_enable:
+                if ignore_refresh or Date.is_next_mon_x_am(cfg.echo_of_war_timestamp, cfg.refresh_hour):
+                    # 注意，这里并没有解决每天开始时间。也就是4点开始。按照真实时间进行执行
+                    isoweekday = datetime.date.today().isoweekday()
+                    if isoweekday >= cfg.echo_of_war_start_day_of_week:
+                        Echoofwar.start()
+                    else:
+                        log.info(f"历战余响设置周{cfg.echo_of_war_start_day_of_week}后开始执行，当前为周{isoweekday}, 跳过执行")
                 else:
-                    log.info(f"历战余响设置周{cfg.echo_of_war_start_day_of_week}后开始执行，当前为周{isoweekday}, 跳过执行")
+                    log.info("历战余响尚未刷新")
             else:
-                log.info("历战余响尚未刷新")
-        else:
-            log.info("历战余响未开启")
+                log.info("历战余响未开启")
 
-        Power.run()
+            Power.run()
+        else:
+            log.info("清体力未开启，跳过历战余响和清体力")
 
         if cfg.daily_enable:
-            if Date.is_next_x_am(cfg.last_run_timestamp, cfg.refresh_hour):
+            if ignore_refresh or Date.is_next_x_am(cfg.last_run_timestamp, cfg.refresh_hour):
                 Daily.run()
             else:
                 log.info("每日实训尚未刷新")
         else:
             log.info("每日实训未开启")
+
+    @staticmethod
+    def routine():
+        Daily.prepare_daily(ignore_refresh=True)
+        reward.start()
+
+    @staticmethod
+    def _run_scheduled_divergent_universe(divergent: DivergentUniverse):
+        target_count = int(cfg.universe_count)
+        cycle = "weekly" if cfg.universe_frequency == "weekly" else "daily"
+        cycle_label = "本周" if cycle == "weekly" else "今日"
+
+        if target_count <= 0:
+            log.info("差分宇宙固定次数为 0，跳过执行并记录本轮时间")
+            cfg.save_timestamp("universe_timestamp")
+            return
+
+        completed_count = DivergentUniverse.get_recorded_run_count(cycle)
+        if completed_count >= target_count:
+            log.info(f"差分宇宙固定次数（{cycle_label}）已完成 {completed_count}/{target_count}，跳过执行")
+            cfg.save_timestamp("universe_timestamp")
+            return
+
+        remaining_runs = target_count - completed_count
+        log.info(f"差分宇宙固定次数进度（{cycle_label}）：{completed_count}/{target_count}，继续运行剩余 {remaining_runs} 次")
+
+        for _ in range(remaining_runs):
+            if not divergent.start():
+                log.warning(f"差分宇宙本轮未完成，不计入固定次数，下次将从 {cycle_label} {completed_count}/{target_count} 继续")
+                return
+
+            completed_count = DivergentUniverse.get_recorded_run_count(cycle)
+            log.info(f"差分宇宙固定次数（{cycle_label}）已完成 {completed_count}/{target_count}")
+
+        cfg.save_timestamp("universe_timestamp")
+        log.info("差分宇宙固定次数已全部完成，记录本轮执行时间")
+
+    @staticmethod
+    def start():
+        Daily.prepare_daily()
 
         if cfg.currencywars_enable:
             if Date.is_next_mon_x_am(cfg.currencywars_timestamp, cfg.refresh_hour):
@@ -107,9 +150,7 @@ class Daily:
             if Date.is_next_mon_x_am(cfg.universe_timestamp, cfg.refresh_hour):
                 if cfg.universe_enable:
                     if cfg.universe_category == "divergent":
-                        for _ in range(cfg.universe_count):
-                            divergent.start()
-                        cfg.save_timestamp("universe_timestamp")
+                        Daily._run_scheduled_divergent_universe(divergent)
                     else:
                         Universe.start()
                 else:
@@ -120,9 +161,7 @@ class Daily:
             if Date.is_next_x_am(cfg.universe_timestamp, cfg.refresh_hour):
                 if cfg.universe_enable:
                     if cfg.universe_category == "divergent":
-                        for _ in range(cfg.universe_count):
-                            divergent.start()
-                        cfg.save_timestamp("universe_timestamp")
+                        Daily._run_scheduled_divergent_universe(divergent)
                     else:
                         Universe.start()
                 else:

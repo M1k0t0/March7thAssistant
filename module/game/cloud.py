@@ -6,6 +6,11 @@ import platform
 import sys
 import base64
 import time
+<<<<<<< HEAD
+=======
+import io
+import ctypes
+>>>>>>> upstream/main
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, SessionNotCreatedException
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -217,6 +222,13 @@ class CloudGameController(GameControllerBase):
             f"--remote-debugging-port={self.cfg.browser_debug_port}",   # 调试端口，可用于复用浏览器
             "--remote-allow-origins=*",   # 允许 WebSocket 跨域连接（CDP 输入需要）
         ]
+        # if not headless:
+        #     args += [
+        #         "--disable-backgrounding-occluded-windows",  # 避免窗口被遮挡/最小化后页面降速
+        #         "--disable-renderer-backgrounding",          # 避免渲染进程在后台被降级
+        #         "--disable-background-timer-throttling",     # 避免后台定时器被节流
+        #         "--disable-features=CalculateNativeWinOcclusion",  # 关闭 Windows 原生遮挡检测
+        #     ]
         if self.cfg.browser_persistent_enable:
             args += [
                 f"--user-data-dir={self.user_profile_path}",   # UserProfile 路径
@@ -330,6 +342,239 @@ class CloudGameController(GameControllerBase):
         self.stop_game()
         self._connect_or_create_browser(headless=headless)
 
+<<<<<<< HEAD
+=======
+    def _load_initial_local_storage(self) -> bool:
+        """加载初始配置，去除初始引导，免责协议等弹窗"""
+
+        try:
+            with open("assets/config/initial_local_storage.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # settings = json.loads(data["clgm_web_app_settings_hkrpg_cn"])
+            # settings["videoMode"] = self.cfg.cloud_game_smooth_first_enable if 1 else 0
+            # data["clgm_web_app_settings_hkrpg_cn"] = json.dumps(settings)
+
+            # client_config = json.loads(data["clgm_web_app_client_store_config_hkrpg_cn"])
+            # client_config["speedLimitGearId"] = self.cfg.cloud_game_video_quality
+            # client_config["fabPosition"]["x"] = self.cfg.cloud_game_fab_pos_x
+            # client_config["fabPosition"]["y"] = self.cfg.cloud_game_fab_pos_y
+            # client_config["showGameStatBar"] = self.cfg.cloud_game_status_bar_enable
+            # client_config["gameStatBarType"] = self.cfg.cloud_game_status_bar_type
+            # client_config["volume"] = self.cfg.browser_headless_enable if 0 else 1
+            # data["clgm_web_app_client_store_config_hkrpg_cn"] = json.dumps(client_config)
+
+            # 注入浏览器
+            for key, value in data.items():
+                self.driver.execute_script(
+                    "window.localStorage.setItem(arguments[0], arguments[1]);",
+                    key,
+                    value,
+                )
+            self.log_info("加载初始配置成功")
+            return True
+        except Exception as e:
+            self.log_error(f"加载初始配置失败 {e}")
+            return False
+
+    def _save_cookies(self) -> bool:
+        """保存 Cookies （Debug only）"""
+        if not self.driver:
+            return
+        try:
+            cookies_json = json.dumps(self.driver.get_cookies(), ensure_ascii=False, indent=4)
+            with open(self.COOKIE_PATH, "wb") as f:
+                # f.write(wdp_encrypt(cookies_json.encode()))
+                f.write(cookies_json.encode())
+            self.log_info("登录信息保存成功。")
+        except Exception as e:
+            self.log_error(f"保存 cookies 失败: {e}")
+
+    def _load_cookies(self) -> bool:
+        """加载 Cookies （Debug only）"""
+        if not self.driver:
+            return False
+        try:
+            with open(self.COOKIE_PATH, "rb") as f:
+                # cookies = json.loads(wdp_decrypt(f.read()).decode())
+                cookies = json.loads(f.read().decode())
+
+            for cookie in cookies:
+                try:
+                    self.driver.add_cookie(cookie)
+                except Exception:
+                    pass  # 忽略无效 cookie
+
+            self.driver.refresh()
+            self.log_info("登录信息加载成功。")
+            return True
+        except FileNotFoundError:
+            self.log_info("cookies 文件不存在。")
+            return False
+        except Exception as e:
+            self.log_error(f"加载 cookies 失败: {e}")
+            return False
+
+    def _refresh_page(self) -> None:
+        if self.driver:
+            self.driver.refresh()
+            self._wait_game_page_loaded()
+
+    def _get_remaining_playtime(self):
+        """
+        获取云游戏剩余时长（分钟），付费时长 + 免费时长之和。
+        若两者均无法识别则返回 None。
+        """
+        if not self.driver:
+            return None
+        try:
+            paid_selector = "#app > div.home-wrapper > div.welcome > div.welcome-wrapper > div > div.wel-card__content > div.wel-card__content--wallet > div.wallet-item.coin > div.left > span:nth-child(1) > span.left__value > span:nth-child(1)"
+            free_selector = "#app > div.home-wrapper > div.welcome > div.welcome-wrapper > div > div.wel-card__content > div.wel-card__content--wallet > div.wallet-item.ft > div.left > span > span:nth-child(2)"
+            paid_els = self.driver.find_elements(By.CSS_SELECTOR, paid_selector)
+            free_els = self.driver.find_elements(By.CSS_SELECTOR, free_selector)
+            paid = int(paid_els[0].text.strip()) if paid_els else None
+            free = int(free_els[0].text.strip()) if free_els else None
+            if paid is None and free is None:
+                return None
+            return (paid or 0) + (free or 0)
+        except Exception as e:
+            self.log_debug(f"获取剩余时长失败: {e}")
+            return None
+
+    def _check_login(self, timeout=5) -> bool:
+        """检查是否已经登录"""
+        if not self.driver:
+            return None
+
+        logged_in_selector = "div.user-aid.wel-card__aid, .game-player, [class*='waiting-in-queue']"
+        not_logged_in_id = "mihoyo-login-platform-iframe"
+
+        try:
+            state = WebDriverWait(self.driver, timeout).until(
+                lambda d: (
+                    "logged_in"
+                    if d.find_elements(By.CSS_SELECTOR, logged_in_selector)
+                    else (
+                        "not_logged_in"
+                        if d.find_elements(By.ID, not_logged_in_id)
+                        else None
+                    )
+                )
+            )
+
+            return state == "logged_in"
+        except TimeoutException:
+            self.log_warning("检测登录状态超时：未出现登录或未登录标志元素")
+            return None
+
+    def _click_enter_game(self, timeout=5) -> None:
+        """
+        点击‘进入游戏’按钮。
+        """
+        if not self.driver:
+            return
+
+        game_selector = ".game-player"
+        guide_close_selector = "div.guide-close-btn__x"
+        enter_button_selector = "div.wel-card__content--start"
+        try:
+            if self.driver.find_elements(By.CSS_SELECTOR, game_selector):
+                self.log_info("已在游戏中")
+                return
+            guide_close_btn = self.driver.find_elements(By.CSS_SELECTOR, guide_close_selector)
+            if guide_close_btn:
+                # 先关闭 “保存网页地址，下次可一键游玩” 引导弹窗，避免遮挡后续游戏画面
+                self.driver.execute_script("arguments[0].click();", guide_close_btn[0])
+            enter_button = WebDriverWait(self.driver, timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, enter_button_selector))
+            )
+            self.driver.execute_script("arguments[0].click();", enter_button)
+        except Exception as e:
+            self.log_error(f"点击进入游戏按钮游戏异常: {e}")
+            raise e
+
+    def _wait_in_queue(self, timeout=600) -> bool:
+        """排队等待进入"""
+        in_queue_selector = "[class*='waiting-in-queue']"
+        cloud_game_selector = ".game-player"
+        select_queue_selector = "[aria-labelledby*='请选择排队队列']"
+
+        try:
+            # 检查是否需要排队
+            status = WebDriverWait(self.driver, 10).until(
+                lambda d: d.execute_script("""
+                    if (document.querySelector(arguments[0])) return "game_running";
+                    else if (document.querySelector(arguments[1])) return "in_queue";
+                    else if (document.querySelector(arguments[2])) return "select_queue";
+                    else return null;
+                """, cloud_game_selector, in_queue_selector, select_queue_selector)
+            )
+
+            select_retries = 0
+            while status == "select_queue":
+                select_retries += 1
+                if select_retries >= 5:
+                    self.log_error("选择排队队列超时")
+                    return False
+                self.log_info("检测到选择排队队列界面，选择普通队列")
+                self.driver.execute_script("""
+                    try {
+                        document.getElementsByClassName("coin-prior-choose-item-include-info")[1].click();
+                    } catch(e) {}
+                """)
+                time.sleep(2)
+                status = WebDriverWait(self.driver, 10).until(
+                    lambda d: d.execute_script("""
+                        if (document.querySelector(arguments[0])) return "game_running";
+                        else if (document.querySelector(arguments[1])) return "in_queue";
+                        else if (document.querySelector(arguments[2])) return "select_queue";
+                        else return null;
+                    """, cloud_game_selector, in_queue_selector, select_queue_selector)
+                )
+
+            if status == "game_running":
+                self.log_info("游戏已启动，无需排队")
+                return True
+            elif status == "in_queue":
+                self.log_info("正在排队...")
+                last_wait_time = None
+                poll_interval = 5  # 每5秒检测一次
+                start_time = time.monotonic()
+                while time.monotonic() - start_time < timeout:
+                    # 检查是否已退出排队
+                    if not self.driver.find_elements(By.CSS_SELECTOR, in_queue_selector):
+                        self.log_info("排队成功，正在进入游戏")
+                        return True
+                    # 检测预计等待时间
+                    wait_time = self.driver.execute_script("""
+                        // 方式1: "预估排队时间30分钟以上，建议开拓者错峰进行游戏~"
+                        var timeHide = document.querySelector('.time-hide__text');
+                        if (timeHide && timeHide.textContent) {
+                            return timeHide.textContent.trim();
+                        }
+                        // 方式2: "预计等待时间 10~20 分钟"
+                        var singleRow = document.querySelector('.single-row');
+                        if (singleRow) {
+                            var valEl = singleRow.querySelector('.single-row__val');
+                            if (valEl && valEl.textContent) {
+                                return '预计等待时间: ' + valEl.textContent.replace(/\\s+/g, '').trim();
+                            }
+                        }
+                        return null;
+                    """)
+                    if wait_time and wait_time != last_wait_time:
+                        self.log_info(f"当前状态: {wait_time}")
+                        last_wait_time = wait_time
+                    time.sleep(poll_interval)
+                self.log_error("排队超时")
+                return False
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.log_error(f"等待排队异常: {e}")
+            return False
+
+>>>>>>> upstream/main
     def _clean_at_exit(self) -> None:
         """当脚本退出时，关闭所有 headless 浏览器"""
         if self.close_all_m7a_browser(headless=True):
@@ -464,6 +709,256 @@ class CloudGameController(GameControllerBase):
 
             self.log_error(f"相关页面和截图已经保存到：{dump_dir}")
 
+<<<<<<< HEAD
+=======
+    def _switch_to_login_iframe(self) -> None:
+        iframe = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.ID, "mihoyo-login-platform-iframe"))
+        )
+        self.driver.switch_to.frame(iframe)
+
+    def _click_qr_login_button(self) -> None:
+        qr_login_button = WebDriverWait(self.driver, 5).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "div.qr-login-btn"))
+        )
+        try:
+            qr_login_button.click()
+            time.sleep(0.5)
+        except Exception as click_err:
+            self.log_warning(f"点击二维码登录按钮失败: {click_err}")
+
+    def _wait_and_get_qr_img(self):
+        self.log_debug("等待二维码加载...")
+        qr_img = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "img.qr-loaded"))
+        )
+        self.log_debug("二维码已加载")
+        time.sleep(1)
+        return qr_img
+
+    def _save_qr_from_src(self, qr_img, qr_filename) -> None:
+        """从元素的 src 保存二维码图片（支持 data URI 与 HTTP URL）。"""
+        try:
+            qr_src = qr_img.get_attribute("src")
+            # data URI 形式
+            if qr_src and qr_src.startswith("data:image"):
+                b64_data = qr_src.split(",", 1)[1]
+                img_bytes = base64.b64decode(b64_data)
+                with open(qr_filename, "wb") as f:
+                    f.write(img_bytes)
+                return
+
+            # 网络图片，使用 requests 下载
+            if qr_src and qr_src.startswith("http"):
+                resp = requests.get(qr_src, timeout=10)
+                resp.raise_for_status()
+                with open(qr_filename, "wb") as f:
+                    f.write(resp.content)
+                return
+
+            # 其他情况回退为元素截图
+            qr_img.screenshot(qr_filename)
+        except Exception as e:
+            self.log_warning(f"保存二维码失败，尝试截图保存: {e}")
+            try:
+                qr_img.screenshot(qr_filename)
+            except Exception as err:
+                self.log_error(f"保存二维码失败: {err}")
+                raise
+
+    def _save_qr_img(self, qr_img) -> str:
+        import os
+        # 将二维码保存到 logs 目录，方便 Docker 挂载访问
+        logs_dir = "logs"
+        os.makedirs(logs_dir, exist_ok=True)
+        qr_filename = os.path.join(logs_dir, "qrcode_login.png")
+        self._save_qr_from_src(qr_img, qr_filename)
+        self.log_info("=" * 60)
+        self.log_info("请使用手机米游社 APP 扫描二维码登录")
+        self.log_info(f"二维码图片位置: {os.path.abspath(qr_filename)}")
+        return qr_filename
+
+    def _send_qr_notification(self, img_bytes: bytes, qr_link: str) -> bool:
+        """通过已配置的通知渠道发送二维码图片
+
+        支持所有启用图片发送的通知渠道（飞书、Telegram、企业微信等）
+        并带有限流，避免二维码刷新时重复推送过多通知。
+        """
+        from module.notification import notif
+        from module.notification.notification import NotificationLevel
+
+        now_ts = time.time()
+
+        # 达到上限后不再推送（直到本轮登录结束）
+        if self._qr_notify_sent_count >= self._qr_notify_max_count:
+            self.log_info(f"二维码登录通知已达上限（{self._qr_notify_max_count}次），本轮不再推送")
+            return False
+
+        # 短时间内同链接重复刷新，跳过推送
+        if (
+            qr_link
+            and qr_link == self._qr_notify_last_link
+            and (now_ts - self._qr_notify_last_sent_ts) < self._qr_notify_min_interval_sec
+        ):
+            self.log_debug("二维码链接短时间内重复，跳过本次通知")
+            return False
+
+        # 将图片字节转换为 BytesIO
+        image_io = io.BytesIO(img_bytes)
+
+        # 发送通知到所有已配置的渠道
+        message = "请使用米游社APP扫描二维码登录\n\n链接：" + qr_link
+        notif.notify(content=message, image=image_io, level=NotificationLevel.ALL)
+
+        self._qr_notify_sent_count += 1
+        self._qr_notify_last_link = qr_link or ""
+        self._qr_notify_last_sent_ts = now_ts
+
+        self.log_info(f"二维码登录通知已发送（{self._qr_notify_sent_count}/{self._qr_notify_max_count}）")
+        return True
+
+    def _decode_qr_from_element(self, qr_img, qr_filename: str) -> None:
+        try:
+            import base64
+            import numpy as np
+            import cv2
+
+            qr_src = qr_img.get_attribute("src")
+            img_bytes = None
+            if qr_src and qr_src.startswith("data:image"):
+                b64_data = qr_src.split(",", 1)[1]
+                img_bytes = base64.b64decode(b64_data)
+            else:
+                with open(qr_filename, "rb") as f:
+                    img_bytes = f.read()
+
+            if not img_bytes:
+                self.log_debug("二维码图片为空")
+                return
+
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                self.log_debug("二维码图片解码失败")
+                return
+
+            # 手动补白边
+            h, w = img.shape[:2]
+            pad = max(10, min(h, w) // 10)  # 10% 尺寸，至少 10px
+
+            img = cv2.copyMakeBorder(
+                img,
+                pad, pad, pad, pad,
+                cv2.BORDER_CONSTANT,
+                value=255  # 白色静区
+            )
+
+            detector = cv2.QRCodeDetector()
+            data, points, _ = detector.detectAndDecode(img)
+
+            if data:
+                self.log_info("二维码内容：")
+                self.log_info(data)
+                self.log_info("提示：你也可以将该内容自行生成二维码后再扫码登录。")
+
+                # 发送二维码登录通知
+                try:
+                    self._send_qr_notification(img_bytes, data)
+                except Exception as e:
+                    self.log_warning(f"发送二维码登录通知失败: {e}")
+            else:
+                self.log_debug("未能解析二维码内容。")
+
+        except Exception as e:
+            self.log_warning(f"解析二维码内容失败: {e}")
+
+    def _wait_scan_success_with_refresh(self, qr_filename: str) -> None:
+        import os
+        check_interval = 2
+        while True:
+            # 成功
+            if self.driver.find_elements(By.XPATH, "//*[contains(text(), '扫码成功')]"):
+                try:
+                    if os.path.exists(qr_filename):
+                        os.remove(qr_filename)
+                        self.log_debug(f"已删除二维码图片: {os.path.abspath(qr_filename)}")
+                except Exception as del_err:
+                    self.log_warning(f"删除二维码图片失败: {del_err}")
+                self.log_info("扫码成功！请在手机上点击【确认登录】")
+                break
+
+            # 过期刷新
+            expired_elements = self.driver.find_elements(By.CSS_SELECTOR, "div.qr-expired")
+            if expired_elements and expired_elements[0].is_displayed():
+                self.log_warning("二维码已过期，正在刷新...")
+                try:
+                    qr_wrap = self.driver.find_element(By.CSS_SELECTOR, "div.qr-wrap")
+                    qr_wrap.click()
+                    time.sleep(1)
+
+                    WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "img.qr-loaded"))
+                    )
+                    self.log_info("二维码已刷新，请重新扫描")
+
+                    try:
+                        qr_img = self.driver.find_element(By.CSS_SELECTOR, "img.qr-loaded")
+                        self._save_qr_from_src(qr_img, qr_filename)
+                        self.log_info("=" * 60)
+                        self.log_info("请使用手机米游社 APP 扫描二维码登录")
+                        self.log_info(f"二维码图片位置: {os.path.abspath(qr_filename)}")
+                        self._decode_qr_from_element(qr_img, qr_filename)
+                        self.log_info("=" * 60)
+                        self.log_info("等待扫码（二维码过期将自动刷新）...")
+                    except Exception as refresh_err:
+                        self.log_warning(f"保存刷新后的二维码失败: {refresh_err}")
+                except Exception as refresh_err:
+                    self.log_error(f"刷新二维码失败: {refresh_err}")
+                    break
+
+            time.sleep(check_interval)
+
+    def _run_qr_login_flow(self) -> None:
+        self.log_info("正在切换到二维码登录...")
+
+        # 每次进入二维码登录流程时重置通知限流状态
+        self._qr_notify_sent_count = 0
+        self._qr_notify_last_link = ""
+        self._qr_notify_last_sent_ts = 0.0
+
+        try:
+            self._switch_to_login_iframe()
+            self._click_qr_login_button()
+            qr_img = self._wait_and_get_qr_img()
+            try:
+                qr_filename = self._save_qr_img(qr_img)
+            except Exception as save_err:
+                self.log_warning(f"保存二维码截图失败: {save_err}")
+                qr_filename = os.path.join("logs", "qrcode_login.png")
+
+            # 初次解码
+            self._decode_qr_from_element(qr_img, qr_filename)
+            self.log_info("=" * 60)
+            self.log_info("等待扫码（二维码过期将自动刷新）...")
+            self._wait_scan_success_with_refresh(qr_filename)
+        except TimeoutException:
+            self.log_warning("等待二维码加载超时")
+        except Exception as e:
+            import traceback
+            self.log_error(f"切换二维码登录失败: {e}")
+            self.log_error(f"详细错误:\n{traceback.format_exc()}")
+            try:
+                self.try_dump_page()
+            except Exception as dump_err:
+                self.log_warning(f"尝试导出页面失败: {dump_err}")
+        finally:
+            try:
+                self.driver.switch_to.default_content()
+                self.log_info("已切换回主文档")
+            except Exception as switch_err:
+                self.log_warning(f"切回主文档失败: {switch_err}")
+
+>>>>>>> upstream/main
     def start_game_process(self, headless=None) -> bool:
         """启动浏览器进程"""
         try:
@@ -593,25 +1088,314 @@ class CloudGameController(GameControllerBase):
         except Exception as e:
             self.log_warning(f"点击 Lock Mouse 按钮失败: {e}")
 
-    def take_screenshot(self) -> bytes:
-        """浏览器内截图"""
+    def _take_video_screenshot(self, crop=(0, 0, 1, 1)) -> tuple[bytes, tuple[int, int]] | None:
+        """直接从云游戏画面元素抓取当前帧，避免整页截图开销。"""
         if not self.driver:
             return None
+
+        try:
+            result = self.driver.execute_async_script(
+                """
+                const crop = arguments[0];
+                const callback = arguments[arguments.length - 1];
+
+                const safeNumber = (value) => Number.isFinite(value) ? Number(value) : null;
+                const buildRect = (rect) => ({
+                    x: safeNumber(rect.x),
+                    y: safeNumber(rect.y),
+                    width: safeNumber(rect.width),
+                    height: safeNumber(rect.height),
+                });
+                const buildSourceDebug = (element) => {
+                    if (!element) {
+                        return null;
+                    }
+                    const tagName = element.tagName ? element.tagName.toUpperCase() : null;
+                    const computedStyle = window.getComputedStyle(element);
+                    return {
+                        tagName,
+                        className: String(element.className ?? ''),
+                        sourceKind: tagName === 'CANVAS' ? 'canvas' : (tagName === 'VIDEO' ? 'video' : 'unknown'),
+                        readyState: safeNumber('readyState' in element ? element.readyState : null),
+                        networkState: safeNumber('networkState' in element ? element.networkState : null),
+                        paused: 'paused' in element ? Boolean(element.paused) : null,
+                        ended: 'ended' in element ? Boolean(element.ended) : null,
+                        muted: 'muted' in element ? Boolean(element.muted) : null,
+                        currentTime: safeNumber('currentTime' in element ? element.currentTime : null),
+                        duration: safeNumber('duration' in element ? element.duration : null),
+                        videoWidth: safeNumber('videoWidth' in element ? element.videoWidth : null),
+                        videoHeight: safeNumber('videoHeight' in element ? element.videoHeight : null),
+                        canvasWidth: safeNumber('width' in element ? element.width : null),
+                        canvasHeight: safeNumber('height' in element ? element.height : null),
+                        clientWidth: safeNumber(element.clientWidth),
+                        clientHeight: safeNumber(element.clientHeight),
+                        offsetWidth: safeNumber(element.offsetWidth),
+                        offsetHeight: safeNumber(element.offsetHeight),
+                        currentSrc: typeof element.currentSrc === 'string' && element.currentSrc ? element.currentSrc.slice(0, 300) : null,
+                        crossOrigin: 'crossOrigin' in element ? (element.crossOrigin ?? null) : null,
+                        rect: buildRect(element.getBoundingClientRect()),
+                        display: computedStyle.display,
+                        visibility: computedStyle.visibility,
+                        opacity: computedStyle.opacity,
+                    };
+                };
+                const getSourceInfo = (element) => {
+                    const tagName = element.tagName ? element.tagName.toUpperCase() : '';
+                    if (tagName === 'CANVAS') {
+                        return {
+                            kind: 'canvas',
+                            width: safeNumber(element.width) ?? safeNumber(element.clientWidth),
+                            height: safeNumber(element.height) ?? safeNumber(element.clientHeight),
+                        };
+                    }
+                    if (tagName === 'VIDEO') {
+                        return {
+                            kind: 'video',
+                            width: safeNumber(element.videoWidth) ?? safeNumber(element.clientWidth),
+                            height: safeNumber(element.videoHeight) ?? safeNumber(element.clientHeight),
+                        };
+                    }
+                    return {
+                        kind: 'unknown',
+                        width: safeNumber(element.width) ?? safeNumber(element.videoWidth) ?? safeNumber(element.clientWidth),
+                        height: safeNumber(element.height) ?? safeNumber(element.videoHeight) ?? safeNumber(element.clientHeight),
+                    };
+                };
+                const exportCanvas = (canvas, sourceWidth, sourceHeight, stage, debug) => {
+                    debug.stage = stage;
+                    canvas.toBlob((blob) => {
+                        debug.stage = stage + '_callback';
+                        if (!blob) {
+                            callback({ error: 'canvas.toBlob 返回空结果', debug });
+                            return;
+                        }
+
+                        debug.blobSize = blob.size;
+                        debug.blobType = blob.type;
+
+                        const reader = new FileReader();
+                        reader.onloadend = () => callback({
+                            dataUrl: reader.result,
+                            sourceWidth,
+                            sourceHeight,
+                            debug: {
+                                ...debug,
+                                stage: 'reader_done',
+                                dataUrlLength: typeof reader.result === 'string' ? reader.result.length : null,
+                            },
+                        });
+                        reader.onerror = () => callback({
+                            error: reader.error ? String(reader.error) : 'FileReader 读取失败',
+                            debug: {
+                                ...debug,
+                                stage: 'reader_failed',
+                            },
+                        });
+                        reader.readAsDataURL(blob);
+                    }, 'image/png');
+                };
+
+                const debug = {
+                    stage: 'init',
+                    crop,
+                    locationHref: window.location.href,
+                    documentReadyState: document.readyState,
+                    gamePlayerCount: document.querySelectorAll('.game-player').length,
+                    videoCount: document.querySelectorAll('.game-player__video').length,
+                    canvasPlayerCount: document.querySelectorAll('#canvas-player.game-player__video').length,
+                    timestamp: new Date().toISOString(),
+                };
+
+                try {
+                    debug.stage = 'query_source';
+                    const source = document.querySelector('.game-player__video');
+                    debug.video = buildSourceDebug(source);
+
+                    if (!source) {
+                        callback({ error: '未找到 .game-player__video 元素', debug });
+                        return;
+                    }
+
+                    const sourceInfo = getSourceInfo(source);
+                    debug.sourceKind = sourceInfo.kind;
+                    debug.sourceWidth = sourceInfo.width;
+                    debug.sourceHeight = sourceInfo.height;
+
+                    if (sourceInfo.kind === 'unknown') {
+                        debug.stage = 'unknown_source';
+                        callback({ error: '截图源既不是 canvas 也不是 video', debug });
+                        return;
+                    }
+
+                    if (!sourceInfo.width || !sourceInfo.height) {
+                        debug.stage = 'source_not_ready';
+                        callback({ error: '游戏画面元素尺寸为 0，可能尚未开始渲染', debug });
+                        return;
+                    }
+
+                    debug.stage = 'compute_crop';
+                    const sourceWidth = sourceInfo.width;
+                    const sourceHeight = sourceInfo.height;
+                    const left = Math.min(sourceWidth - 1, Math.max(0, Math.floor(sourceWidth * crop[0])));
+                    const top = Math.min(sourceHeight - 1, Math.max(0, Math.floor(sourceHeight * crop[1])));
+                    const width = Math.min(sourceWidth - left, Math.max(1, Math.floor(sourceWidth * crop[2])));
+                    const height = Math.min(sourceHeight - top, Math.max(1, Math.floor(sourceHeight * crop[3])));
+                    debug.captureRect = { left, top, width, height };
+                    debug.isFullCrop = left == 0 && top == 0 && width == sourceWidth && height == sourceHeight;
+
+                    if (sourceInfo.kind === 'canvas' && debug.isFullCrop) {
+                        exportCanvas(source, sourceWidth, sourceHeight, 'source_canvas_to_blob', debug);
+                        return;
+                    }
+
+                    debug.stage = 'create_canvas';
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+
+                    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                    if (!ctx) {
+                        debug.stage = 'get_context_failed';
+                        callback({ error: '无法创建 canvas 2d 上下文', debug });
+                        return;
+                    }
+
+                    debug.stage = 'draw_image';
+                    ctx.drawImage(source, left, top, width, height, 0, 0, width, height);
+
+                    try {
+                        debug.stage = 'read_canvas';
+                        const pixel = ctx.getImageData(0, 0, Math.min(1, width), Math.min(1, height));
+                        debug.sampleRgba = pixel ? Array.from(pixel.data.slice(0, 4)) : null;
+                    } catch (readError) {
+                        debug.readCanvasError = String(readError);
+                    }
+
+                    exportCanvas(canvas, sourceWidth, sourceHeight, 'to_blob', debug);
+                } catch (error) {
+                    callback({
+                        error: String(error),
+                        debug: {
+                            ...debug,
+                            stage: 'exception',
+                        },
+                    });
+                }
+                """,
+                list(crop),
+            )
+        except Exception as e:
+            page_url = None
+            page_title = None
+            try:
+                page_url = self.driver.current_url
+                page_title = self.driver.title
+            except Exception:
+                pass
+            self.log_debug(
+                f"执行视频元素截图脚本异常: crop={crop}, url={page_url}, title={page_title}, error={e}"
+            )
+            raise
+
+        if not result:
+            self.log_debug(f"视频元素截图返回空结果: crop={crop}")
+            return None
+
+        debug_info = result.get("debug")
+
+        if result.get("error"):
+            if debug_info is not None:
+                try:
+                    self.log_debug(
+                        f"视频元素截图失败调试信息: {json.dumps(debug_info, ensure_ascii=False, default=str)}"
+                    )
+                except Exception as log_err:
+                    self.log_debug(f"视频元素截图调试信息序列化失败: {log_err}; 原始调试信息: {debug_info}")
+            error_message = result["error"]
+            if isinstance(debug_info, dict) and debug_info.get("stage"):
+                error_message = f"{error_message} (stage={debug_info['stage']})"
+            raise RuntimeError(error_message)
+
+        data_url = result.get("dataUrl")
+        if not data_url or "," not in data_url:
+            if debug_info is not None:
+                try:
+                    self.log_debug(
+                        f"视频元素截图返回了无效 dataUrl，调试信息: {json.dumps(debug_info, ensure_ascii=False, default=str)}"
+                    )
+                except Exception as log_err:
+                    self.log_debug(f"视频元素截图调试信息序列化失败: {log_err}; 原始调试信息: {debug_info}")
+            else:
+                self.log_debug(f"视频元素截图返回的 dataUrl 无效: keys={list(result.keys())}")
+            return None
+
+        _, encoded = data_url.split(",", 1)
+        return base64.b64decode(encoded), (int(result["sourceWidth"]), int(result["sourceHeight"]))
+
+    def _take_browser_screenshot(self) -> bytes | None:
+        """使用浏览器原生截图能力作为回退方案。"""
+        if not self.driver:
+            return None
+
         # 仅在 macOS 非 headless 模式下使用 CDP 截图，避免浏览器被切换到前台
-        if not self.cfg.browser_headless_enable and platform.system() == "Darwin":
+        # if not self.cfg.browser_headless_enable and platform.system() == "Darwin":
             # Chrome/Chromium 在非 headless 模式下调用 get_screenshot_as_png() 时，
             # 会先确保窗口“可见且未被遮挡”，否则截图内容可能为空或全黑。
             # macOS 的窗口管理要求被截取的 NSWindow 处于前台/可见状态，
             # Chromium 的实现会自动把窗口置前。
             # 改用 CDP 截图接口可以避免这个问题。
-            try:
-                result = self.driver.execute_cdp_cmd("Page.captureScreenshot", {"format": "png"})
-                data = result.get("data") if result else None
-                if data:
-                    return base64.b64decode(data)
-            except Exception as e:
-                self.log_warning(f"CDP 截图失败，回退 WebDriver 截图: {e}")
+        try:
+            self._ensure_window_not_minimized_for_frame_capture()
+            # 未知原因，PNG 格式截图特别慢，改用 JPEG 格式可以显著提升截图速度
+            # result = self.driver.execute_cdp_cmd("Page.captureScreenshot", {"format": "png"})
+            result = self.driver.execute_cdp_cmd("Page.captureScreenshot", {"format": "jpeg", "quality": 100})
+            data = result.get("data") if result else None
+            if data:
+                return base64.b64decode(data)
+        except Exception as e:
+            self.log_debug(f"CDP 截图失败，回退 WebDriver 截图: {e}")
+
         return self.driver.get_screenshot_as_png()
+
+    def _ensure_window_not_minimized_for_frame_capture(self) -> None:
+        """视频帧截图依赖前台窗口持续渲染，最小化时先恢复窗口。"""
+        if self.cfg.browser_headless_enable or sys.platform != "win32":
+            return
+
+        hwnd = self.get_window_handle()
+        if not hwnd:
+            return
+
+        try:
+            user32 = ctypes.windll.user32
+            SW_RESTORE = 9
+            if user32.IsIconic(hwnd):
+                self.log_warning("检测到云游戏浏览器已最小化，视频帧可能停止更新，正在恢复窗口")
+                user32.ShowWindow(hwnd, SW_RESTORE)
+                time.sleep(0.1)
+        except Exception as e:
+            self.log_debug(f"恢复云游戏窗口失败，继续尝试截图: {e}")
+
+    def take_screenshot(self, crop=(0, 0, 1, 1), prefer_frame=True) -> bytes | tuple[bytes, tuple[int, int]] | None:
+        """浏览器内截图"""
+        if not self.driver:
+            return None
+
+        return self._take_browser_screenshot()
+
+        # 帧截图有内存占用问题，暂不使用
+        if prefer_frame:
+            try:
+                self._ensure_window_not_minimized_for_frame_capture()
+                video_screenshot = self._take_video_screenshot(crop=crop)
+                if video_screenshot:
+                    return video_screenshot
+                else:
+                    self.log_debug("游戏画面元素截图失败，回退到浏览器截图")
+            except Exception as e:
+                self.log_debug(f"游戏画面元素截图失败，回退浏览器截图: {e}")
+
+        return self._take_browser_screenshot()
 
     def execute_cdp_cmd(self, cmd: str, cmd_args: dict):
         return self.driver.execute_cdp_cmd(cmd, cmd_args)

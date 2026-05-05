@@ -16,6 +16,8 @@ class Screen(metaclass=SingletonMeta):
     界面管理类
     """
 
+    SCREEN_MATCH_THRESHOLD = 0.88
+
     def __init__(self, config_path, logger: Optional[Logger] = None):
         """
         初始化界面管理器。
@@ -64,10 +66,57 @@ class Screen(metaclass=SingletonMeta):
         self.current_screen = None
         self.current_screen_threshold = 0
 
+    def _detect_overlay_monitor_text(self):
+        """
+        通过 OCR 检测是否存在常见帧率/硬件监控悬浮窗文字。
+        :return: 命中的关键词标签列表。
+        """
+        keyword_map = {
+            "FPS": ["fps", "帧率", "framerate", "frame"],
+            "CPU": ["cpu", "处理器", "占用", "usage"],
+            "GPU": ["gpu", "显卡", "vram", "温度", "显存"],
+            "RTSS": ["rtss", "rivatuner", "afterburner", "msi"],
+        }
+
+        try:
+            auto.take_screenshot()
+            auto.perform_ocr()
+            ocr_result = getattr(auto, "ocr_result", []) or []
+            if not ocr_result:
+                return []
+
+            matched = set()
+            for box, (text, confidence) in ocr_result:
+                if not text:
+                    continue
+                normalized_text = text.lower().replace(" ", "")
+                for label, keywords in keyword_map.items():
+                    if any(keyword in normalized_text for keyword in keywords):
+                        matched.add(label)
+
+            return sorted(matched)
+        except Exception as e:
+            self.logger.debug(f"检测监控悬浮窗文本失败：{e}")
+            return []
+
+    def _warn_overlay_monitor_text_if_needed(self):
+        """
+        若检测到常见监控悬浮窗关键词，则给出针对性提示。
+        """
+        matched_labels = self._detect_overlay_monitor_text()
+        if matched_labels:
+            self.logger.warning(
+                f"检测到疑似监控悬浮窗文字：{', '.join(matched_labels)}，这可能导致界面识别失败"
+            )
+            self.logger.warning(
+                "建议关闭帧率/硬件监控悬浮窗（如 FPS、CPU、GPU、RTSS、Afterburner 等）后重试"
+            )
+
     def _handle_autotry(self):
         """
         处理自动重试逻辑，包括按ESC键和处理特定的异常情况。
         """
+        self._warn_overlay_monitor_text_if_needed()
         self.logger.warning("未识别出任何界面，请确保游戏画面干净，按ESC后重试")
         auto.press_key("esc")
         time.sleep(2)  # 等待屏幕变化
@@ -99,7 +148,12 @@ class Screen(metaclass=SingletonMeta):
             if found_event.is_set():
                 return None
             try:
-                result = self._find_image(screen['image_path'], "image_threshold", 0.9, take_screenshot=False)
+                result = self._find_image(
+                    screen['image_path'],
+                    "image_threshold",
+                    self.SCREEN_MATCH_THRESHOLD,
+                    take_screenshot=False,
+                )
                 if result and not found_event.is_set():
                     with self.lock:
                         if not self.current_screen or self.current_screen_threshold < result:
@@ -111,7 +165,11 @@ class Screen(metaclass=SingletonMeta):
                 self.logger.debug(f"识别界面出错：{e}")
             return None
 
-        if self.current_screen is not None and self._find_image(self.screen_map[self.current_screen]['image_path'], "image_threshold", 0.9):
+        if self.current_screen is not None and self._find_image(
+            self.screen_map[self.current_screen]['image_path'],
+            "image_threshold",
+            self.SCREEN_MATCH_THRESHOLD,
+        ):
             return True
 
         for i in range(max_retries):
@@ -179,6 +237,41 @@ class Screen(metaclass=SingletonMeta):
         # 如果遍历完所有可能的路径都没有找到目标界面，返回 None
         return None
 
+    def can_change_from(self, start_screen, target_screen):
+        """
+        判断是否能从指定界面主动切换到目标界面。
+        """
+        if start_screen not in self.screen_map or target_screen not in self.screen_map:
+            return False
+        return self.find_shortest_path(start_screen, target_screen) is not None
+
+    def get_switchable_screens(self, start_screen="main", include_start=True):
+        """
+        获取从指定界面可主动切换到的所有界面，按 BFS 顺序返回。
+        :return: [(screen_id, screen_name), ...]
+        """
+        if start_screen not in self.screen_map:
+            return []
+
+        visited = {start_screen}
+        queue = deque([start_screen])
+        result = []
+
+        if include_start:
+            result.append((start_screen, self.get_name(start_screen)))
+
+        while queue:
+            current_screen = queue.popleft()
+            for action in self.screen_map[current_screen]['actions']:
+                next_screen = action.get("target_screen")
+                if next_screen in visited or next_screen not in self.screen_map:
+                    continue
+                visited.add(next_screen)
+                result.append((next_screen, self.get_name(next_screen)))
+                queue.append(next_screen)
+
+        return result
+
     def get_name(self, id):
         """
         根据界面ID获取界面名称。
@@ -194,7 +287,7 @@ class Screen(metaclass=SingletonMeta):
         :param target_screen: 目标界面的标识符。
         :return: 如果当前界面是目标界面，则返回True；否则返回False。
         """
-        if self._find_image(self.screen_map[target_screen]['image_path'], "image", 0.9):
+        if self._find_image(self.screen_map[target_screen]['image_path'], "image", self.SCREEN_MATCH_THRESHOLD):
             # 如果找到了目标界面的图像，则更新当前界面状态为目标界面
             self.current_screen = target_screen
             return True

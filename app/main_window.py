@@ -12,6 +12,7 @@ from .help_interface import HelpInterface
 # from .changelog_interface import ChangelogInterface
 from .warp_interface import WarpInterface
 from .tools_interface import ToolsInterface
+from .workflow_interface import WorkflowInterface
 from .setting_interface import SettingInterface
 from .log_interface import LogInterface
 from .common.signal_bus import signalBus
@@ -135,6 +136,9 @@ class MainWindow(MSFluentWindow):
 
         self.setWindowIcon(QIcon('./assets/logo/March7th.ico'))
         self.setWindowTitle("March7th Assistant")
+        # 分离系统窗口标题与应用内标题栏文本
+        if hasattr(self, 'titleBar') and hasattr(self.titleBar, 'setTitle'):
+            self.titleBar.setTitle(f"March7th Assistant {cfg.version}")
 
         # 创建启动画面
         self.splashScreen = SplashScreen(self.windowIcon(), self)
@@ -172,6 +176,7 @@ class MainWindow(MSFluentWindow):
         # self.changelogInterface = ChangelogInterface(self)
         self.warpInterface = WarpInterface(self)
         self.toolsInterface = ToolsInterface(self)
+        self.workflowInterface = WorkflowInterface(self)
         self.logInterface = LogInterface(self)
         self.settingInterface = SettingInterface(self)
 
@@ -190,6 +195,7 @@ class MainWindow(MSFluentWindow):
         # self.addSubInterface(self.changelogInterface, FIF.UPDATE, '更新日志')
         self.addSubInterface(self.warpInterface, FIF.SHARE, tr('抽卡记录'))
         self.addSubInterface(self.toolsInterface, FIF.DEVELOPER_TOOLS, tr('工具箱'))
+        self.addSubInterface(self.workflowInterface, FIF.CODE, tr('流程编排'))
 
         self.navigationInterface.addWidget(
             'startGameButton',
@@ -365,8 +371,6 @@ class MainWindow(MSFluentWindow):
             actual_lang = lang_code
             if actual_lang == 'auto':
                 actual_lang = detect_lang()
-                if actual_lang == 'ja_JP':
-                    actual_lang = 'en_US'
 
             cfg.ui_language_now = actual_lang
             load_language(actual_lang)
@@ -402,6 +406,8 @@ class MainWindow(MSFluentWindow):
                 pass
         if lang_code == 'zh_TW':
             self._fluent_translator = FluentTranslator(QLocale(QLocale.Language.Chinese, QLocale.Country.Taiwan))
+        elif lang_code == 'ja_JP':
+            self._fluent_translator = FluentTranslator(QLocale(QLocale.Language.Japanese, QLocale.Country.Japan))
         elif lang_code == 'ko_KR':
             self._fluent_translator = FluentTranslator(QLocale(QLocale.Language.Korean, QLocale.Country.SouthKorea))
         elif lang_code == 'en_US':
@@ -425,10 +431,11 @@ class MainWindow(MSFluentWindow):
         try:
             # ── 轻量 TOP 界面：逐一移除旧→添加新 ───────────────────────
             top_specs = [
-                ('homeInterface',  FIF.HOME,            tr('主页'),     HomeInterface),
-                ('helpInterface',  FIF.BOOK_SHELF,      tr('帮助'),     HelpInterface),
-                ('warpInterface',  FIF.SHARE,           tr('抽卡记录'), WarpInterface),
-                ('toolsInterface', FIF.DEVELOPER_TOOLS, tr('工具箱'),   ToolsInterface),
+                ('homeInterface', FIF.HOME, tr('主页'), HomeInterface),
+                ('helpInterface', FIF.BOOK_SHELF, tr('帮助'), HelpInterface),
+                ('warpInterface', FIF.SHARE, tr('抽卡记录'), WarpInterface),
+                ('toolsInterface', FIF.DEVELOPER_TOOLS, tr('工具箱'), ToolsInterface),
+                ('workflowInterface', FIF.CODE, tr('流程编排'), WorkflowInterface),
             ]
             for attr, icon, label, cls in top_specs:
                 old = getattr(self, attr, None)
